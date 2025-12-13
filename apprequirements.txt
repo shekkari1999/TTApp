@@ -1,0 +1,2 @@
+Initial functionality
+Schoool has 7subjects.
