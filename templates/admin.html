@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Setup - TTApp</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⚙️ Admin Setup - Initial School Configuration</h1>
+            <p class="subtitle">Add teachers, subjects, and classes for your school</p>
+            <a href="/" class="btn-back">← Back to Main</a>
+        </header>
+
+        <main>
+            <!-- Teachers Section -->
+            <section class="admin-section">
+                <div class="section-header">
+                    <h2>👨‍🏫 Teachers</h2>
+                    <button class="btn btn-primary btn-small" onclick="showAddTeacherForm()">+ Add Teacher</button>
+                </div>
+                <div id="teachersList" class="data-list"></div>
+            </section>
+
+            <!-- Subjects Section -->
+            <section class="admin-section">
+                <div class="section-header">
+                    <h2>📚 Subjects</h2>
+                    <button class="btn btn-primary btn-small" onclick="showAddSubjectForm()">+ Add Subject</button>
+                </div>
+                <div id="subjectsList" class="data-list"></div>
+            </section>
+
+            <!-- Classes Section -->
+            <section class="admin-section">
+                <div class="section-header">
+                    <h2>🏫 Classes</h2>
+                    <button class="btn btn-primary btn-small" onclick="showAddClassForm()">+ Add Class</button>
+                </div>
+                <div id="classesList" class="data-list"></div>
+            </section>
+        </main>
+
+        <!-- Modals -->
+        <!-- Add/Edit Teacher Modal -->
+        <div id="teacherModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <span class="close" onclick="closeModal('teacherModal')">&times;</span>
+                <h2 id="teacherModalTitle">Add Teacher</h2>
+                <form id="teacherForm" onsubmit="saveTeacher(event)">
+                    <input type="hidden" id="teacherId">
+                    <div class="form-group">
+                        <label for="teacherName">Teacher Name:</label>
+                        <input type="text" id="teacherName" required>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="teacherIsClassTeacher">
+                            Is Class Teacher
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="teacherIsLeisure">
+                            Is Leisure (not assigned to classes)
+                        </label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Save</button>
+                        <button type="button" class="btn btn-secondary" onclick="closeModal('teacherModal')">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Add/Edit Subject Modal -->
+        <div id="subjectModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <span class="close" onclick="closeModal('subjectModal')">&times;</span>
+                <h2 id="subjectModalTitle">Add Subject</h2>
+                <form id="subjectForm" onsubmit="saveSubject(event)">
+                    <input type="hidden" id="subjectId">
+                    <div class="form-group">
+                        <label for="subjectName">Subject Name:</label>
+                        <input type="text" id="subjectName" required>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Save</button>
+                        <button type="button" class="btn btn-secondary" onclick="closeModal('subjectModal')">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Add/Edit Class Modal -->
+        <div id="classModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <span class="close" onclick="closeModal('classModal')">&times;</span>
+                <h2 id="classModalTitle">Add Class</h2>
+                <form id="classForm" onsubmit="saveClass(event)">
+                    <input type="hidden" id="classId">
+                    <div class="form-group">
+                        <label for="className">Class Name:</label>
+                        <input type="text" id="className" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="classTeacherId">Class Teacher:</label>
+                        <select id="classTeacherId">
+                            <option value="">None</option>
+                        </select>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Save</button>
+                        <button type="button" class="btn btn-secondary" onclick="closeModal('classModal')">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='admin.js') }}"></script>
+</body>
+</html>
+

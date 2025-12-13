@@ -1,9 +1,23 @@
 [project]
 name = "ttapp"
 version = "0.1.0"
-description = "Add your description here"
+description = "School Timetable Management System"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "flask>=3.0.0",
+    "flask-sqlalchemy>=3.1.0",
+    "psycopg2-binary>=2.9.9",
+    "python-dotenv>=1.0.0",
     "ipykernel>=7.1.0",
 ]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["app", "models", "main"]
+
+[tool.setuptools.packages.find]
+exclude = ["templates*", "static*", "tests*"]

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TTApp - School Timetable Management</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📚 TTApp - School Timetable Management</h1>
+            <p class="subtitle">Manage schedules, teachers, and substitutions</p>
+            <a href="/admin" class="admin-link">⚙️ Admin Setup (Initial Configuration)</a>
+        </header>
+
+        <main>
+            <!-- Admin Setup Reminder -->
+            <section class="info-section" id="setupReminder" style="display: none;">
+                <div class="info-card">
+                    <strong>⚠️ Setup Required:</strong> Please add teachers, subjects, and classes in <a href="/admin">Admin Setup</a> before generating schedules.
+                </div>
+            </section>
+
+            <!-- Main Action Buttons Section -->
+            <section class="action-section">
+                <div class="button-group">
+                    <button id="generateScheduleBtn" class="btn btn-primary btn-large">
+                        <span class="btn-icon">🎯</span>
+                        <span class="btn-text">Generate Initial Schedule</span>
+                        <span class="btn-description">Create schedule for all teachers for the first time</span>
+                    </button>
+
+                    <button id="viewAbsentBtn" class="btn btn-secondary btn-large">
+                        <span class="btn-icon">👁️</span>
+                        <span class="btn-text">View Absent Teachers & Substitutions</span>
+                        <span class="btn-description">See who's absent and available substitutes for today</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Teacher Timetable Section -->
+            <section class="teacher-timetable-section">
+                <h2>📅 Generate Teacher Timetable</h2>
+                <div class="timetable-controls">
+                    <div class="form-group-inline">
+                        <label for="teacherSelect">Select Teacher:</label>
+                        <select id="teacherSelect">
+                            <option value="">-- Select a teacher --</option>
+                        </select>
+                    </div>
+                    <div class="form-group-inline">
+                        <label for="timetableDate">Date:</label>
+                        <input type="date" id="timetableDate" value="">
+                    </div>
+                    <button id="generateTeacherTimetableBtn" class="btn btn-primary">Generate Timetable</button>
+                </div>
+                <div id="teacherTimetableResult" class="timetable-result" style="display: none;"></div>
+            </section>
+
+            <!-- Configuration Section (Collapsible) -->
+            <section class="config-section">
+                <div class="config-header" onclick="toggleConfig()">
+                    <h2>⚙️ Configuration</h2>
+                    <span class="toggle-icon" id="configToggle">▼</span>
+                </div>
+                <div class="config-content" id="configContent" style="display: none;">
+                    <div class="config-grid">
+                        <div class="config-item">
+                            <label for="numClasses">Number of Classes:</label>
+                            <input type="number" id="numClasses" min="1" value="5">
+                        </div>
+                        <div class="config-item">
+                            <label for="numSubjects">Number of Subjects:</label>
+                            <input type="number" id="numSubjects" min="1" value="7">
+                        </div>
+                        <div class="config-item">
+                            <label for="periodsPerDay">Periods per Day:</label>
+                            <input type="number" id="periodsPerDay" min="1" value="8">
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Results/Output Section -->
+            <section class="results-section" id="resultsSection" style="display: none;">
+                <h2>Results</h2>
+                <div id="resultsContent" class="results-content"></div>
+            </section>
+
+            <!-- Absent Teachers Details Section -->
+            <section class="absent-details-section" id="absentDetailsSection" style="display: none;">
+                <h2>Absent Teachers & Substitution Suggestions</h2>
+                <div class="date-selector">
+                    <label for="absenceDate">Select Date:</label>
+                    <input type="date" id="absenceDate" value="">
+                </div>
+                <div id="absentDetailsContent" class="absent-details-content"></div>
+            </section>
+        </main>
+
+        <footer>
+            <p>TTApp v0.1.0 - School Timetable Management System</p>
+        </footer>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay" style="display: none;">
+        <div class="spinner"></div>
+        <p>Processing...</p>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
+

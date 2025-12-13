@@ -1,2 +1,14 @@
 Initial functionality
-Schoool has 7subjects.
+
+We do need a demo database to test i guess
+We need a login system
+Schoool has some number of subjects. lets make this a variubale thatcan be dynamically given. The subjects canalso be stored
+School has some number of teachers. Their names can also be stored
+There will be some number of total classes. Remmeber we should be able to select all of these in app UI.
+
+like for example if there are 5 classes and 7 teachers, any ofthe 5 teachers can be class teacher(always takes the first period) two teachers will be leisure. based on number of subjects and 
+number of classes, each teacher has certain number of classes per day. If any class teacher is absent(we should be able to select that), 2 teachers who are not class teachers should be randomly substituted based on their schedule.
+
+we should be also able to generate schdule of a teacher for any particular day.
+
+
