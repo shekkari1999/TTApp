@@ -11,7 +11,16 @@
         <header>
             <h1>📚 TTApp - School Timetable Management</h1>
             <p class="subtitle">Manage schedules, teachers, and substitutions</p>
-            <a href="/admin" class="admin-link">⚙️ Admin Setup (Initial Configuration)</a>
+            <div style="margin-top: 1rem;">
+                <a href="/admin" class="admin-link">⚙️ Admin Setup (Initial Configuration)</a>
+                {% if session.get('user_id') %}
+                <span style="margin: 0 10px; color: #666;">|</span>
+                <span style="color: #666;">Logged in as <strong>{{ session.get('username') }}</strong></span>
+                <a href="/logout" style="margin-left: 10px; color: #c62828; text-decoration: none;">Logout</a>
+                {% else %}
+                <a href="/login" style="margin-left: 10px; color: #4CAF50; text-decoration: none;">Login</a>
+                {% endif %}
+            </div>
         </header>
 
         <main>

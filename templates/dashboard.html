@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Timetable - TTApp</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        
+        .user-info {
+            color: #666;
+        }
+        
+        .timetable-container {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .date-selector {
+            margin-bottom: 2rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .date-selector label {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .date-selector input {
+            padding: 8px 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 16px;
+        }
+        
+        .timetable-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+        
+        .timetable-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+        }
+        
+        .timetable-table td {
+            padding: 12px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        .timetable-table tr:hover {
+            background-color: #f9fafb;
+        }
+        
+        .no-schedule {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+        }
+        
+        .no-teacher {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 8px;
+            padding: 1.5rem;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="dashboard-header">
+            <div>
+                <h1>📅 My Timetable</h1>
+                <p class="subtitle">View your schedule for any day</p>
+            </div>
+            <div class="user-info">
+                <span>Logged in as <strong>{{ user.username }}</strong></span>
+                <a href="/logout" style="margin-left: 15px; color: #c62828; text-decoration: none;">Logout</a>
+            </div>
+        </div>
+
+        <main>
+            {% if not teacher %}
+            <div class="no-teacher">
+                <h3>⚠️ No Teacher Profile</h3>
+                <p>Your account is not linked to a teacher profile. Please contact the administrator to set up your teacher account.</p>
+            </div>
+            {% else %}
+            <div class="timetable-container">
+                <div class="date-selector">
+                    <label for="timetableDate">Select Date:</label>
+                    <input type="date" id="timetableDate" value="{{ date.today().isoformat() }}">
+                    <button id="loadTimetableBtn" class="btn btn-primary">Load Timetable</button>
+                </div>
+                
+                <div id="timetableContent">
+                    <div class="no-schedule">
+                        <p>Select a date and click "Load Timetable" to view your schedule.</p>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </main>
+
+        <footer>
+            <p>TTApp v0.1.0 - School Timetable Management System</p>
+        </footer>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay" style="display: none;">
+        <div class="spinner"></div>
+        <p>Loading...</p>
+    </div>
+
+    <script>
+        // Initialize date picker to today
+        document.addEventListener('DOMContentLoaded', function() {
+            const dateInput = document.getElementById('timetableDate');
+            if (dateInput && !dateInput.value) {
+                dateInput.value = new Date().toISOString().split('T')[0];
+            }
+            
+            // Load timetable on button click
+            document.getElementById('loadTimetableBtn')?.addEventListener('click', loadTimetable);
+            
+            // Load timetable on date change
+            dateInput?.addEventListener('change', function() {
+                if (dateInput.value) {
+                    loadTimetable();
+                }
+            });
+            
+            // Auto-load today's timetable
+            if (dateInput?.value) {
+                loadTimetable();
+            }
+        });
+
+        function showLoading() {
+            document.getElementById('loadingOverlay').style.display = 'flex';
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingOverlay').style.display = 'none';
+        }
+
+        async function loadTimetable() {
+            const dateInput = document.getElementById('timetableDate');
+            const selectedDate = dateInput.value || new Date().toISOString().split('T')[0];
+            const contentDiv = document.getElementById('timetableContent');
+            
+            showLoading();
+            
+            try {
+                const response = await fetch(`/api/my-timetable?date=${selectedDate}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayTimetable(data, contentDiv);
+                } else {
+                    contentDiv.innerHTML = `<div class="no-schedule"><p>${data.message || 'Error loading timetable'}</p></div>`;
+                }
+            } catch (error) {
+                contentDiv.innerHTML = `<div class="no-schedule"><p>Error: ${error.message}</p></div>`;
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function displayTimetable(data, container) {
+            if (data.timetable.length === 0) {
+                const message = data.message || 'No classes scheduled for this day.';
+                container.innerHTML = `
+                    <div class="no-schedule">
+                        <h3>📅 ${data.teacher.name}'s Timetable</h3>
+                        <p><strong>Date:</strong> ${data.day_name}, ${data.date}</p>
+                        <p>${message}</p>
+                    </div>
+                `;
+            } else {
+                let html = `
+                    <h3>📅 ${data.teacher.name}'s Timetable</h3>
+                    <p><strong>Date:</strong> ${data.day_name}, ${data.date}</p>
+                    <table class="timetable-table">
+                        <thead>
+                            <tr>
+                                <th>Period</th>
+                                <th>Class</th>
+                                <th>Subject</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                
+                data.timetable.forEach(item => {
+                    html += `
+                        <tr>
+                            <td><strong>Period ${item.period}</strong></td>
+                            <td>${item.class_name}</td>
+                            <td>${item.subject_name}</td>
+                        </tr>
+                    `;
+                });
+                
+                html += `
+                        </tbody>
+                    </table>
+                `;
+                
+                container.innerHTML = html;
+            }
+        }
+    </script>
+</body>
+</html>
+
