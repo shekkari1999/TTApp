@@ -1,14 +1,22 @@
-Initial functionality
+Now these are somewhat custom requirements I guess.
 
-We do need a demo database to test i guess
-We need a login system
-Schoool has some number of subjects. lets make this a variubale thatcan be dynamically given. The subjects canalso be stored
-School has some number of teachers. Their names can also be stored
-There will be some number of total classes. Remmeber we should be able to select all of these in app UI.
+1. Sundays are holidays
 
-like for example if there are 5 classes and 7 teachers, any ofthe 5 teachers can be class teacher(always takes the first period) two teachers will be leisure. based on number of subjects and 
-number of classes, each teacher has certain number of classes per day. If any class teacher is absent(we should be able to select that), 2 teachers who are not class teachers should be randomly substituted based on their schedule.
+2. For 6th and 7th class, there will be 6 subjects only.(physical science and bio science will be just science). 
+This science subject will be taught by bio science teachers.
 
-we should be also able to generate schdule of a teacher for any particular day.
+and additionally there will be library and games for them everyday, totalling 8 periods.
 
+3. For 8th, 9th classes, there will be 7 subjects(here science becomes physical science and bio science).
+the remaining period, three days will be library and 3 days will be games.
 
+4. For 10th class, there will be no library or games. here 1st and last period will be maths. and remaining 
+6 periods covers all other subjects.
+
+5. class teachers will teach the first period they are incharge of.
+
+Now create a generate schedule button and when you generate a schedule, see that there is no overalap.
+follow the above rules. create any table or relationship that is necessary.
+
+6 TM
+6 EM 

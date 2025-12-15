@@ -7,12 +7,13 @@ substitution for absent teachers.
 """
 
 from flask import Flask, render_template, jsonify, request, session, redirect, url_for
-from models import db, Teacher, Subject, Class, Schedule, Absence, User
+from models import db, Teacher, Subject, Class, Schedule, Absence, User, TeacherUpdateRequest
 from datetime import datetime, date, timedelta
 from functools import wraps
 import os
 from dotenv import load_dotenv
 import random
+from sqlalchemy import func
 
 # Load environment variables
 load_dotenv()
@@ -81,6 +82,39 @@ with app.app_context():
                     print("✅ Made email nullable in users table")
         except Exception as e:
             print(f"⚠️ Email migration check failed: {e}")
+            db.session.rollback()
+        
+        # Check if teacher_update_requests table exists
+        try:
+            tables = [t for t in inspector.get_table_names()]
+            if 'teacher_update_requests' not in tables:
+                db.session.execute(text("""
+                    CREATE TABLE teacher_update_requests (
+                        id SERIAL PRIMARY KEY,
+                        teacher_id INTEGER NOT NULL REFERENCES teachers(id),
+                        requested_subject_ids TEXT NOT NULL,
+                        requested_class_ids TEXT NOT NULL,
+                        status VARCHAR(20) DEFAULT 'pending' NOT NULL,
+                        admin_notes TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                    )
+                """))
+                db.session.commit()
+                print("✅ Created teacher_update_requests table")
+        except Exception as e:
+            print(f"⚠️ Teacher update requests table check failed: {e}")
+            db.session.rollback()
+        
+        # Check if classes table has grade column
+        try:
+            columns = [col['name'] for col in inspector.get_columns('classes')]
+            if 'grade' not in columns:
+                db.session.execute(text("ALTER TABLE classes ADD COLUMN grade INTEGER"))
+                db.session.commit()
+                print("✅ Added grade column to classes table")
+        except Exception as e:
+            print(f"⚠️ Grade column migration check failed: {e}")
             db.session.rollback()
         
         # Check if teacher_subjects table exists
@@ -618,31 +652,25 @@ def dashboard():
 @login_required
 def generate_schedule():
     """
-    Generate initial schedule for all teachers.
-    
-    This endpoint:
-    1. Clears existing schedules
-    2. Generates a new schedule based on:
-       - Number of classes
-       - Number of subjects
-       - Number of teachers
-       - Class teacher assignments
-    3. Assigns periods to teachers avoiding conflicts
-    
-    Returns JSON response with success status and message.
+    Generate schedule following custom rules:
+    - Sundays are holidays (no schedules)
+    - 6th and 7th: 6 subjects + library + games = 8 periods daily
+    - 8th and 9th: 7 subjects + library/games (alternating) = 8 periods
+    - 10th: Maths at 1st and last period, remaining 6 periods for other subjects (no library/games)
+    - No overlaps: one teacher can't teach multiple classes at same period/day
+    - Only assign teachers who actually teach that subject
+    - Each subject has exactly one teacher per class
     """
+    admin_user = User.query.get(session['user_id'])
+    if not admin_user or not admin_user.is_admin:
+        return jsonify({'success': False, 'message': 'Admin access required'}), 403
+    
     try:
-        # Get configuration from request
-        data = request.get_json() or {}
-        num_classes = data.get('num_classes', 5)
-        num_subjects = data.get('num_subjects', 7)
-        periods_per_day = data.get('periods_per_day', 8)
-        
         # Clear existing schedules
         Schedule.query.delete()
         db.session.commit()
         
-        # Get all teachers (excluding leisure teachers)
+        # Get all data
         teachers = Teacher.query.filter_by(is_leisure=False).all()
         classes = Class.query.all()
         subjects = Subject.query.all()
@@ -650,80 +678,471 @@ def generate_schedule():
         if not teachers or not classes or not subjects:
             return jsonify({
                 'success': False,
-                'message': 'Please add teachers, classes, and subjects first in the configuration.'
+                'message': 'Please add teachers, classes, and subjects first.'
             }), 400
         
-        # Ensure we have enough teachers and subjects
-        # Note: We need at least 1 non-leisure teacher (teachers can teach multiple classes)
-        if len(teachers) < 1:
+        # Check if classes have grades set
+        classes_without_grade = [c.name for c in classes if c.grade is None]
+        if classes_without_grade:
             return jsonify({
                 'success': False,
-                'message': 'Need at least 1 non-leisure teacher to generate schedules.'
+                'message': f'Please set grade for classes: {", ".join(classes_without_grade)}'
             }), 400
         
-        # Note: No minimum subject requirement - will use available subjects
+        # Find special subjects (Library, Games, Maths, Physical Science, Bio Science)
+        library_subject = Subject.query.filter(func.lower(Subject.name) == 'library').first()
+        games_subject = Subject.query.filter(func.lower(Subject.name) == 'games').first()
+        maths_subject = Subject.query.filter(func.lower(Subject.name) == 'maths').first()
+        if not maths_subject:
+            maths_subject = Subject.query.filter(func.lower(Subject.name) == 'mathematics').first()
         
-        # Generate schedule for each day of the week (Monday=0 to Sunday=6)
-        # We'll generate for Monday-Friday (0-4)
+        # For 6th/7th grade: Physical Science and Bio Science become "Science"
+        physical_science_subject = Subject.query.filter(
+            func.lower(Subject.name).in_(['physical science', 'physics'])
+        ).first()
+        bio_science_subject = Subject.query.filter(
+            func.lower(Subject.name).in_(['bio science', 'biology', 'biological science'])
+        ).first()
+        science_subject = Subject.query.filter(func.lower(Subject.name) == 'science').first()
+        
+        # Build teacher-subject map (which teachers teach which subjects)
+        teacher_subject_map = {}  # {teacher_id: set(subject_ids)}
+        for teacher in teachers:
+            teacher_subject_map[teacher.id] = {s.id for s in teacher.subjects}
+        
+        # Build subject-teacher map (which teachers can teach each subject)
+        subject_teacher_map = {}  # {subject_id: [teacher_ids]}
+        for subject in subjects:
+            subject_teacher_map[subject.id] = [
+                t.id for t in teachers if subject.id in teacher_subject_map.get(t.id, set())
+            ]
+        
+        # For 6th/7th grade: Create special "Science" subject mapping
+        # Science should be taught by Bio Science teachers
+        if bio_science_subject:
+            bio_science_teachers = subject_teacher_map.get(bio_science_subject.id, [])
+            # If we have a "Science" subject, add bio science teachers to it
+            if science_subject:
+                subject_teacher_map[science_subject.id] = list(set(
+                    subject_teacher_map.get(science_subject.id, []) + bio_science_teachers
+                ))
+            # Also allow using bio_science_subject directly as "Science" for 6th/7th
+            if bio_science_subject.id not in subject_teacher_map:
+                subject_teacher_map[bio_science_subject.id] = bio_science_teachers
+        
+        # Helper: Get available teacher for a subject at a specific period/day
+        def get_available_teacher_for_subject(subject_id, day, period, exclude_class_id=None, allow_no_teacher=False):
+            """Find a teacher who can teach this subject and is free at this period.
+            If allow_no_teacher is True, returns a special marker (-1) if no teacher is available.
+            """
+            # Library and Games don't require teachers
+            if allow_no_teacher:
+                # Return a placeholder teacher ID (-1) to indicate no teacher needed
+                # We'll handle this specially when creating the schedule
+                return -1
+            
+            # Get teachers who can teach this subject
+            candidate_teachers = subject_teacher_map.get(subject_id, [])
+            
+            if not candidate_teachers:
+                return None
+            
+            # Check which teachers are already assigned at this period/day
+            busy_teachers = set()
+            existing_schedules = Schedule.query.filter_by(day=day, period=period).all()
+            for sched in existing_schedules:
+                if sched.class_id != exclude_class_id:  # Allow same teacher for same class
+                    busy_teachers.add(sched.teacher_id)
+            
+            # Find available teacher
+            for teacher_id in candidate_teachers:
+                if teacher_id not in busy_teachers:
+                    return teacher_id
+            
+            return None
+        
+        # Track unscheduled periods and missing requirements
+        unscheduled_periods = []
+        missing_requirements = {
+            'subjects_without_teachers': {},  # {subject_name: [class_names]}
+            'classes_missing_subjects': {},  # {class_name: [subject_names]}
+            'classes_missing_teachers': {},  # {class_name: {subject: [periods]}}
+            'summary': []
+        }
+        
+        # Pre-check: Identify subjects that have no teachers assigned
+        subjects_without_any_teacher = []
+        for subject in subjects:
+            if subject.id not in subject_teacher_map or len(subject_teacher_map[subject.id]) == 0:
+                subjects_without_any_teacher.append(subject.name)
+        
+        if subjects_without_any_teacher:
+            missing_requirements['summary'].append(
+                f"Subjects with no teachers assigned: {', '.join(subjects_without_any_teacher)}"
+            )
+        
+        # Generate schedule for Monday-Friday (0-4), Sunday (6) is holiday
         for day in range(5):  # Monday to Friday
-            # Assign class teachers to first period of their classes
             for class_obj in classes:
-                if class_obj.class_teacher_id:
-                    class_teacher = Teacher.query.get(class_obj.class_teacher_id)
-                    if class_teacher and not class_teacher.is_leisure:
-                        # Assign first period to class teacher
+                grade = class_obj.grade
+                
+                if grade in [6, 7]:
+                    # 6th and 7th: 6 subjects + library + games = 8 periods
+                    # Physical Science and Bio Science become "Science" (taught by Bio Science teachers)
+                    # Get regular subjects (exclude library, games, physical science)
+                    regular_subjects = [
+                        s for s in subjects 
+                        if s.id != (library_subject.id if library_subject else None)
+                        and s.id != (games_subject.id if games_subject else None)
+                        and s.id != (physical_science_subject.id if physical_science_subject else None)
+                    ]
+                    
+                    # Replace Bio Science with "Science" if Science subject exists, otherwise use Bio Science
+                    # If both Physical Science and Bio Science exist, combine them into Science
+                    science_subject_to_use = None
+                    if science_subject:
+                        science_subject_to_use = science_subject
+                    elif bio_science_subject:
+                        science_subject_to_use = bio_science_subject
+                    
+                    # Remove bio science from regular subjects if we're using it as Science
+                    if bio_science_subject and science_subject_to_use:
+                        regular_subjects = [s for s in regular_subjects if s.id != bio_science_subject.id]
+                    
+                    # Take up to 5 regular subjects (we'll add Science as the 6th)
+                    regular_subjects = regular_subjects[:5]
+                    
+                    # Add Science as one of the 6 subjects (if available)
+                    if science_subject_to_use:
+                        regular_subjects.append(science_subject_to_use)
+                    
+                    # Ensure we have exactly 6 subjects
+                    regular_subjects = regular_subjects[:6]
+                    
+                    # Period 1: Class teacher if available, otherwise first subject
+                    period1_assigned = False
+                    if class_obj.class_teacher_id and day == 0:  # Only on first day (Monday) for class teacher
+                        # Class teacher teaches first period on Monday
+                        class_teacher = Teacher.query.get(class_obj.class_teacher_id)
+                        if class_teacher and regular_subjects:
+                            schedule = Schedule(
+                                teacher_id=class_teacher.id,
+                                class_id=class_obj.id,
+                                subject_id=regular_subjects[0].id,
+                                day=day,
+                                period=1
+                            )
+                            db.session.add(schedule)
+                            period1_assigned = True
+                    
+                    # Period 1-6: Regular subjects (generate ALL, even without teachers)
+                    for period in range(1, 7):
+                        # Skip period 1 if class teacher already assigned it
+                        if period == 1 and period1_assigned:
+                            continue
+                        
+                        subject_index = period - 1
+                        if subject_index < len(regular_subjects):
+                            subject = regular_subjects[subject_index]
+                            teacher_id = get_available_teacher_for_subject(subject.id, day, period, class_obj.id)
+                            
+                            # If no teacher available, use placeholder teacher
+                            if not teacher_id:
+                                placeholder_teacher = teachers[0] if teachers else None
+                                if placeholder_teacher:
+                                    teacher_id = placeholder_teacher.id
+                                else:
+                                    # Skip if no teachers exist at all
+                                    unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period {period}: {subject.name} (no teachers in system)")
+                                    continue
+                            
+                            schedule = Schedule(
+                                teacher_id=teacher_id,
+                                class_id=class_obj.id,
+                                subject_id=subject.id,
+                                day=day,
+                                period=period
+                            )
+                            db.session.add(schedule)
+                        else:
+                            unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period {period}: No subject assigned")
+                            if class_obj.name not in missing_requirements['classes_missing_subjects']:
+                                missing_requirements['classes_missing_subjects'][class_obj.name] = []
+                            missing_requirements['classes_missing_subjects'][class_obj.name].append(f"Day {day+1} Period {period}")
+                    
+                    # Period 7: Library (no teacher required)
+                    if library_subject:
+                        # Library doesn't need a teacher - use placeholder teacher
+                        teacher_id = get_available_teacher_for_subject(library_subject.id, day, 7, class_obj.id, allow_no_teacher=True)
+                        if teacher_id == -1 or teacher_id is None:
+                            # Use first teacher as placeholder (they won't actually teach Library)
+                            placeholder_teacher = teachers[0] if teachers else None
+                            if placeholder_teacher:
+                                teacher_id = placeholder_teacher.id
+                            else:
+                                continue  # Skip if no teachers exist
+                        
                         schedule = Schedule(
-                            teacher_id=class_teacher.id,
+                            teacher_id=teacher_id,
                             class_id=class_obj.id,
-                            subject_id=subjects[0].id,  # First subject
+                            subject_id=library_subject.id,
+                            day=day,
+                            period=7
+                        )
+                        db.session.add(schedule)
+                    else:
+                        unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period 7: Library subject not found")
+                        missing_requirements['summary'].append(f"{class_obj.name}: Library subject not found in database")
+                    
+                    # Period 8: Games (no teacher required)
+                    if games_subject:
+                        # Games doesn't need a teacher - use placeholder teacher
+                        teacher_id = get_available_teacher_for_subject(games_subject.id, day, 8, class_obj.id, allow_no_teacher=True)
+                        if teacher_id == -1 or teacher_id is None:
+                            # Use first teacher as placeholder
+                            placeholder_teacher = teachers[0] if teachers else None
+                            if placeholder_teacher:
+                                teacher_id = placeholder_teacher.id
+                            else:
+                                continue
+                        
+                        schedule = Schedule(
+                            teacher_id=teacher_id,
+                            class_id=class_obj.id,
+                            subject_id=games_subject.id,
+                            day=day,
+                            period=8
+                        )
+                        db.session.add(schedule)
+                    else:
+                        unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period 8: Games subject not found")
+                        missing_requirements['summary'].append(f"{class_obj.name}: Games subject not found in database")
+                
+                elif grade in [8, 9]:
+                    # 8th and 9th: 7 subjects + library/games (alternating) = 8 periods
+                    # Get 7 regular subjects (exclude library, games)
+                    regular_subjects = [
+                        s for s in subjects 
+                        if s.id != (library_subject.id if library_subject else None)
+                        and s.id != (games_subject.id if games_subject else None)
+                    ][:7]
+                    
+                    # Period 1: Class teacher if available
+                    period1_assigned = False
+                    if class_obj.class_teacher_id and day == 0:  # Only on first day (Monday) for class teacher
+                        class_teacher = Teacher.query.get(class_obj.class_teacher_id)
+                        if class_teacher and regular_subjects:
+                            schedule = Schedule(
+                                teacher_id=class_teacher.id,
+                                class_id=class_obj.id,
+                                subject_id=regular_subjects[0].id,
+                                day=day,
+                                period=1
+                            )
+                            db.session.add(schedule)
+                            period1_assigned = True
+                    
+                    # Period 1-7: Regular subjects (generate ALL, even without teachers)
+                    for period in range(1, 8):
+                        # Skip period 1 if class teacher already assigned it
+                        if period == 1 and period1_assigned:
+                            continue
+                        
+                        subject_index = period - 1
+                        if subject_index < len(regular_subjects):
+                            subject = regular_subjects[subject_index]
+                            teacher_id = get_available_teacher_for_subject(subject.id, day, period, class_obj.id)
+                            
+                            # If no teacher available, use placeholder teacher
+                            if not teacher_id:
+                                placeholder_teacher = teachers[0] if teachers else None
+                                if placeholder_teacher:
+                                    teacher_id = placeholder_teacher.id
+                                else:
+                                    unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period {period}: {subject.name} (no teachers in system)")
+                                    continue
+                            
+                            schedule = Schedule(
+                                teacher_id=teacher_id,
+                                class_id=class_obj.id,
+                                subject_id=subject.id,
+                                day=day,
+                                period=period
+                            )
+                            db.session.add(schedule)
+                    
+                    # Period 8: Library or Games (alternating days) - no teacher required
+                    # Monday, Wednesday, Friday = Library; Tuesday, Thursday = Games
+                    period8_subject = library_subject if day in [0, 2, 4] else games_subject
+                    if period8_subject:
+                        # Library/Games don't require teachers
+                        teacher_id = get_available_teacher_for_subject(period8_subject.id, day, 8, class_obj.id, allow_no_teacher=True)
+                        if teacher_id is None:
+                            continue
+                        if teacher_id == -1:
+                            # Use placeholder teacher
+                            placeholder_teacher = teachers[0] if teachers else None
+                            if placeholder_teacher:
+                                teacher_id = placeholder_teacher.id
+                            else:
+                                continue
+                        
+                        schedule = Schedule(
+                            teacher_id=teacher_id,
+                            class_id=class_obj.id,
+                            subject_id=period8_subject.id,
+                            day=day,
+                            period=8
+                        )
+                        db.session.add(schedule)
+                    else:
+                        unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period 8: Library/Games subject not found")
+                        missing_requirements['summary'].append(f"{class_obj.name}: Library/Games subject not found in database")
+                
+                elif grade == 10:
+                    # 10th: Maths at 1st and last period, remaining 6 periods for other subjects
+                    if not maths_subject:
+                        unscheduled_periods.append(f"{class_obj.name} Day {day+1}: Maths subject not found")
+                        missing_requirements['summary'].append(f"{class_obj.name}: Maths subject not found in database")
+                        continue  # Skip if no Maths subject
+                    
+                    # Period 1: Maths (class teacher if available, otherwise any teacher or placeholder)
+                    if class_obj.class_teacher_id and day == 0:  # Class teacher on Monday
+                        class_teacher = Teacher.query.get(class_obj.class_teacher_id)
+                        if class_teacher:
+                            teacher_id = class_teacher.id
+                        else:
+                            teacher_id = get_available_teacher_for_subject(maths_subject.id, day, 1, class_obj.id)
+                            if not teacher_id:
+                                teacher_id = teachers[0].id if teachers else None
+                    else:
+                        teacher_id = get_available_teacher_for_subject(maths_subject.id, day, 1, class_obj.id)
+                        if not teacher_id:
+                            teacher_id = teachers[0].id if teachers else None
+                    
+                    if teacher_id:
+                        schedule = Schedule(
+                            teacher_id=teacher_id,
+                            class_id=class_obj.id,
+                            subject_id=maths_subject.id,
                             day=day,
                             period=1
                         )
                         db.session.add(schedule)
-            
-            # Assign remaining periods
-            for period in range(2, periods_per_day + 1):
-                for class_obj in classes:
-                    # Get available teachers (not already assigned this period, not leisure)
-                    assigned_teachers = [
-                        s.teacher_id for s in Schedule.query.filter_by(
-                            day=day, period=period
-                        ).all()
-                    ]
                     
-                    available_teachers = [
-                        t for t in teachers 
-                        if t.id not in assigned_teachers
-                    ]
+                    # Period 2-7: Other subjects (exclude Maths) - generate ALL, even without teachers
+                    other_subjects = [
+                        s for s in subjects 
+                        if s.id != maths_subject.id
+                    ][:6]
                     
-                    # If no available teachers, reuse teachers (allow same teacher for multiple classes)
-                    if not available_teachers:
-                        available_teachers = teachers
+                    for period in range(2, 8):
+                        subject_index = period - 2
+                        if subject_index < len(other_subjects):
+                            subject = other_subjects[subject_index]
+                            teacher_id = get_available_teacher_for_subject(subject.id, day, period, class_obj.id)
+                            
+                            # If no teacher available, use placeholder teacher
+                            if not teacher_id:
+                                placeholder_teacher = teachers[0] if teachers else None
+                                if placeholder_teacher:
+                                    teacher_id = placeholder_teacher.id
+                                else:
+                                    unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period {period}: {subject.name} (no teachers in system)")
+                                    continue
+                            
+                            schedule = Schedule(
+                                teacher_id=teacher_id,
+                                class_id=class_obj.id,
+                                subject_id=subject.id,
+                                day=day,
+                                period=period
+                            )
+                            db.session.add(schedule)
+                        else:
+                            unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period {period}: No subject assigned")
+                            if class_obj.name not in missing_requirements['classes_missing_subjects']:
+                                missing_requirements['classes_missing_subjects'][class_obj.name] = []
+                            missing_requirements['classes_missing_subjects'][class_obj.name].append(f"Day {day+1} Period {period}")
                     
-                    if available_teachers and subjects:
-                        # Randomly select a teacher
-                        teacher = random.choice(available_teachers)
-                        # Randomly select a subject
-                        subject = random.choice(subjects)
-                        
+                    # Period 8: Maths
+                    teacher_id = get_available_teacher_for_subject(maths_subject.id, day, 8, class_obj.id)
+                    if not teacher_id:
+                        teacher_id = teachers[0].id if teachers else None
+                    
+                    if teacher_id:
                         schedule = Schedule(
-                            teacher_id=teacher.id,
+                            teacher_id=teacher_id,
                             class_id=class_obj.id,
-                            subject_id=subject.id,
+                            subject_id=maths_subject.id,
                             day=day,
-                            period=period
+                            period=8
                         )
                         db.session.add(schedule)
         
         db.session.commit()
         
-        return jsonify({
+        # Build detailed missing requirements report
+        detailed_report = []
+        
+        # Summary of subjects without any teachers
+        if missing_requirements['summary']:
+            detailed_report.extend(missing_requirements['summary'])
+        
+        # Subjects that need teachers for specific classes (exclude Library and Games)
+        if missing_requirements['subjects_without_teachers']:
+            detailed_report.append("\n📚 Subjects needing teachers:")
+            for subject_name, class_list in missing_requirements['subjects_without_teachers'].items():
+                # Skip Library and Games - they don't need teachers
+                if subject_name.lower() in ['library', 'games']:
+                    continue
+                unique_classes = list(set(class_list))
+                detailed_report.append(f"  • {subject_name}: Needs teacher(s) for classes: {', '.join(unique_classes)}")
+        
+        # Classes missing teachers for specific subjects (exclude Library and Games)
+        if missing_requirements['classes_missing_teachers']:
+            detailed_report.append("\n👨‍🏫 Classes missing teachers for subjects:")
+            for class_name, subjects_dict in missing_requirements['classes_missing_teachers'].items():
+                # Filter out Library and Games
+                filtered_subjects = {k: v for k, v in subjects_dict.items() if k.lower() not in ['library', 'games']}
+                if not filtered_subjects:
+                    continue
+                detailed_report.append(f"  • {class_name}:")
+                for subject_name, periods in filtered_subjects.items():
+                    unique_periods = list(set(periods))
+                    period_count = len(unique_periods)
+                    if period_count <= 3:
+                        detailed_report.append(f"    - {subject_name}: Needs teacher for {', '.join(unique_periods)}")
+                    else:
+                        detailed_report.append(f"    - {subject_name}: Needs teacher for {period_count} periods (e.g., {', '.join(unique_periods[:3])}...)")
+        
+        # Classes missing subjects
+        if missing_requirements['classes_missing_subjects']:
+            detailed_report.append("\n📖 Classes missing subjects:")
+            for class_name, periods in missing_requirements['classes_missing_subjects'].items():
+                unique_periods = list(set(periods))
+                detailed_report.append(f"  • {class_name}: Missing subjects for periods: {', '.join(unique_periods)}")
+        
+        # Build response message
+        if unscheduled_periods:
+            message = f'Schedule generated with {len(unscheduled_periods)} unscheduled periods. See details below.'
+        else:
+            message = f'Schedule generated successfully for {len(classes)} classes following grade-specific rules.'
+        
+        response_data = {
             'success': True,
-            'message': f'Schedule generated successfully for {num_classes} classes, {num_subjects} subjects, and {len(teachers)} teachers.'
-        })
+            'message': message,
+            'unscheduled_count': len(unscheduled_periods),
+            'missing_requirements': missing_requirements,
+            'detailed_report': '\n'.join(detailed_report) if detailed_report else 'All requirements met!'
+        }
+        
+        return jsonify(response_data)
     
     except Exception as e:
         db.session.rollback()
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'message': f'Error generating schedule: {str(e)}'
@@ -1233,7 +1652,7 @@ def reset_subjects():
     return jsonify({
         'success': True,
         'message': 'All subjects have been deleted and IDs reset (no references were found).'
-    })
+        })
 
 
 @app.route('/api/subjects/<int:subject_id>', methods=['PUT', 'DELETE'])
@@ -1332,6 +1751,73 @@ def reset_classes():
         }), 500
 
 
+@app.route('/api/class-schedules', methods=['GET'])
+@login_required
+def get_class_schedules():
+    """Get all class schedules showing which teacher teaches which subject for each class."""
+    admin_user = User.query.get(session['user_id'])
+    if not admin_user or not admin_user.is_admin:
+        return jsonify({'success': False, 'message': 'Admin access required'}), 403
+    
+    # Get all classes
+    classes = Class.query.all()
+    schedules = Schedule.query.all()
+    teachers = Teacher.query.all()
+    subjects = Subject.query.all()
+    
+    # Create lookup maps
+    teacher_map = {t.id: t.name for t in teachers}
+    subject_map = {s.id: s.name for s in subjects}
+    
+    # Find Library and Games subjects to mark them as no-teacher subjects
+    library_subject = Subject.query.filter(func.lower(Subject.name) == 'library').first()
+    games_subject = Subject.query.filter(func.lower(Subject.name) == 'games').first()
+    no_teacher_subject_ids = set()
+    if library_subject:
+        no_teacher_subject_ids.add(library_subject.id)
+    if games_subject:
+        no_teacher_subject_ids.add(games_subject.id)
+    
+    # Build class schedule data
+    class_schedules = []
+    for class_obj in classes:
+        # Get all unique subject-teacher combinations for this class
+        class_schedule_entries = {}
+        
+        for schedule in schedules:
+            if schedule.class_id == class_obj.id:
+                key = (schedule.subject_id, schedule.teacher_id)
+                if key not in class_schedule_entries:
+                    subject_name = subject_map.get(schedule.subject_id, 'Unknown')
+                    # Library and Games don't have teachers
+                    if schedule.subject_id in no_teacher_subject_ids:
+                        teacher_name = 'No teacher'
+                    else:
+                        teacher_name = teacher_map.get(schedule.teacher_id, 'Unknown')
+                    
+                    class_schedule_entries[key] = {
+                        'subject_id': schedule.subject_id,
+                        'subject_name': subject_name,
+                        'teacher_id': schedule.teacher_id,
+                        'teacher_name': teacher_name
+                    }
+        
+        # Sort subjects by name for consistent display
+        subjects_list = list(class_schedule_entries.values())
+        subjects_list.sort(key=lambda x: x['subject_name'])
+        
+        class_schedules.append({
+            'class_id': class_obj.id,
+            'class_name': class_obj.name,
+            'subjects': subjects_list
+        })
+    
+    return jsonify({
+        'success': True,
+        'class_schedules': class_schedules
+        })
+
+
 @app.route('/api/classes/<int:class_id>', methods=['PUT', 'DELETE'])
 @login_required
 def class_detail(class_id):
@@ -1341,6 +1827,7 @@ def class_detail(class_id):
     if request.method == 'PUT':
         data = request.get_json()
         class_obj.name = data.get('name', class_obj.name)
+        class_obj.grade = data.get('grade', class_obj.grade)
         class_obj.class_teacher_id = data.get('class_teacher_id', class_obj.class_teacher_id)
         db.session.commit()
         return jsonify({
@@ -1356,6 +1843,265 @@ def class_detail(class_id):
             'success': True,
             'message': 'Class deleted successfully.'
         })
+
+
+@app.route('/api/teacher-update-request', methods=['POST'])
+@login_required
+def create_teacher_update_request():
+    """Create a teacher update request (subjects and classes)."""
+    user = User.query.get(session['user_id'])
+    if not user or not user.teacher_id:
+        return jsonify({
+            'success': False,
+            'message': 'No teacher profile associated with this account.'
+        }), 400
+    
+    teacher = Teacher.query.get(user.teacher_id)
+    if not teacher:
+        return jsonify({
+            'success': False,
+            'message': 'Teacher profile not found.'
+        }), 404
+    
+    data = request.get_json()
+    subject_ids = data.get('subject_ids', [])
+    class_ids = data.get('class_ids', [])
+    
+    # Validate that subject_ids and class_ids are arrays
+    if not isinstance(subject_ids, list) or not isinstance(class_ids, list):
+        return jsonify({
+            'success': False,
+            'message': 'subject_ids and class_ids must be arrays'
+        }), 400
+    
+    # Check if there's already a pending request
+    existing_request = TeacherUpdateRequest.query.filter_by(
+        teacher_id=teacher.id,
+        status='pending'
+    ).first()
+    
+    if existing_request:
+        return jsonify({
+            'success': False,
+            'message': 'You already have a pending update request. Please wait for admin approval or cancel the existing request.'
+        }), 400
+    
+    import json
+    # Create new request
+    update_request = TeacherUpdateRequest(
+        teacher_id=teacher.id,
+        requested_subject_ids=json.dumps(subject_ids),
+        requested_class_ids=json.dumps(class_ids),
+        status='pending'
+    )
+    
+    db.session.add(update_request)
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'message': 'Update request submitted successfully. Waiting for admin approval.',
+        'request': update_request.to_dict()
+    })
+
+
+@app.route('/api/teacher-update-requests', methods=['GET'])
+@login_required
+def get_teacher_update_requests():
+    """Get all teacher update requests (admin only) or teacher's own requests."""
+    try:
+        user = User.query.get(session['user_id'])
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        if user.is_admin:
+            # Admin sees all requests
+            requests = TeacherUpdateRequest.query.order_by(TeacherUpdateRequest.created_at.desc()).all()
+        else:
+            # Teacher sees only their own requests
+            if not user.teacher_id:
+                return jsonify({
+                    'success': False,
+                    'message': 'No teacher profile associated with this account.'
+                }), 400
+            requests = TeacherUpdateRequest.query.filter_by(
+                teacher_id=user.teacher_id
+            ).order_by(TeacherUpdateRequest.created_at.desc()).all()
+        
+        # Convert to dict with error handling
+        requests_list = []
+        for r in requests:
+            try:
+                requests_list.append(r.to_dict())
+            except Exception as e:
+                print(f"Error converting request {r.id} to dict: {e}")
+                # Return basic info even if to_dict fails
+                requests_list.append({
+                    'id': r.id,
+                    'teacher_id': r.teacher_id,
+                    'teacher_name': r.teacher.name if r.teacher else 'Unknown',
+                    'status': r.status,
+                    'requested_subject_ids': [],
+                    'requested_class_ids': [],
+                    'admin_notes': r.admin_notes,
+                    'created_at': r.created_at.isoformat() if r.created_at else None
+                })
+        
+        return jsonify({
+            'success': True,
+            'requests': requests_list
+        })
+    except Exception as e:
+        print(f"Error in get_teacher_update_requests: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'message': f'Error loading requests: {str(e)}'
+        }), 500
+
+
+@app.route('/api/teacher-update-requests/<int:request_id>/approve', methods=['POST'])
+@login_required
+def approve_teacher_update_request(request_id):
+    """Approve a teacher update request (admin only)."""
+    admin_user = User.query.get(session['user_id'])
+    if not admin_user or not admin_user.is_admin:
+        return jsonify({'success': False, 'message': 'Admin access required'}), 403
+    
+    update_request = TeacherUpdateRequest.query.get_or_404(request_id)
+    if update_request.status != 'pending':
+        return jsonify({
+            'success': False,
+            'message': f'Request is already {update_request.status}'
+        }), 400
+    
+    teacher = Teacher.query.get(update_request.teacher_id)
+    if not teacher:
+        return jsonify({
+            'success': False,
+            'message': 'Teacher not found'
+        }), 404
+    
+    import json
+    data = request.get_json() or {}
+    admin_notes = data.get('admin_notes', '')
+    
+    try:
+        # Parse requested IDs
+        requested_subject_ids = json.loads(update_request.requested_subject_ids)
+        requested_class_ids = json.loads(update_request.requested_class_ids)
+        
+        # Update teacher subjects
+        subjects = Subject.query.filter(Subject.id.in_(requested_subject_ids)).all()
+        teacher.subjects = subjects
+        
+        # Update schedules - remove old schedules for classes teacher no longer teaches
+        requested_class_ids_set = set(requested_class_ids)
+        
+        # Delete schedules for classes teacher no longer teaches
+        # This ensures that if a teacher is removed from teaching a class,
+        # all their schedules for that class are removed
+        all_teacher_schedules = Schedule.query.filter(
+            Schedule.teacher_id == teacher.id
+        ).all()
+        
+        for schedule in all_teacher_schedules:
+            if schedule.class_id not in requested_class_ids_set:
+                db.session.delete(schedule)
+        
+        # Note: We don't automatically create new schedules for new classes
+        # Admin will need to generate/update schedules separately using the schedule generation feature
+        
+        # Update request status
+        update_request.status = 'approved'
+        update_request.admin_notes = admin_notes
+        update_request.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Teacher update request approved. Subjects updated. Schedules for removed classes have been deleted.',
+            'request': update_request.to_dict()
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'message': f'Error approving request: {str(e)}'
+        }), 500
+
+
+@app.route('/api/teacher-update-requests/<int:request_id>/reject', methods=['POST'])
+@login_required
+def reject_teacher_update_request(request_id):
+    """Reject a teacher update request (admin only)."""
+    admin_user = User.query.get(session['user_id'])
+    if not admin_user or not admin_user.is_admin:
+        return jsonify({'success': False, 'message': 'Admin access required'}), 403
+    
+    update_request = TeacherUpdateRequest.query.get_or_404(request_id)
+    if update_request.status != 'pending':
+        return jsonify({
+            'success': False,
+            'message': f'Request is already {update_request.status}'
+        }), 400
+    
+    data = request.get_json() or {}
+    admin_notes = data.get('admin_notes', '')
+    
+    update_request.status = 'rejected'
+    update_request.admin_notes = admin_notes
+    update_request.updated_at = datetime.utcnow()
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'message': 'Teacher update request rejected.',
+        'request': update_request.to_dict()
+    })
+
+
+@app.route('/api/teacher-update-requests/<int:request_id>', methods=['DELETE'])
+@login_required
+def delete_teacher_update_request(request_id):
+    """Delete a teacher update request (teacher can delete own pending requests, admin can delete any)."""
+    user = User.query.get(session['user_id'])
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+    
+    update_request = TeacherUpdateRequest.query.get_or_404(request_id)
+    
+    # Check permissions: teacher can only delete their own pending requests, admin can delete any
+    if not user.is_admin:
+        if not user.teacher_id or update_request.teacher_id != user.teacher_id:
+            return jsonify({
+                'success': False,
+                'message': 'You can only delete your own requests'
+            }), 403
+        
+        if update_request.status != 'pending':
+            return jsonify({
+                'success': False,
+                'message': 'You can only delete pending requests'
+            }), 400
+    
+    try:
+        db.session.delete(update_request)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Request deleted successfully.'
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'message': f'Error deleting request: {str(e)}'
+        }), 500
 
 
 @app.route('/api/my-timetable', methods=['GET'])
@@ -1430,7 +2176,7 @@ def my_timetable():
         'date': target_date.isoformat(),
         'day_name': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][day_of_week],
         'timetable': timetable
-    })
+        })
 
 
 @app.route('/api/teacher-timetable/<int:teacher_id>', methods=['GET'])

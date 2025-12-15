@@ -150,6 +150,7 @@ class Class(db.Model):
     Attributes:
         id: Primary key
         name: Name/identifier of the class (e.g., "Class 1", "Grade 5A")
+        grade: Grade/level of the class (6, 7, 8, 9, 10, etc.) - used for schedule generation rules
         class_teacher_id: Foreign key to the teacher assigned as class teacher
         created_at: Timestamp when record was created
     """
@@ -157,6 +158,7 @@ class Class(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(50), nullable=False, unique=True)
+    grade = db.Column(db.Integer, nullable=True)  # Grade level: 6, 7, 8, 9, 10, etc.
     class_teacher_id = db.Column(db.Integer, db.ForeignKey('teachers.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     
@@ -171,6 +173,7 @@ class Class(db.Model):
         return {
             'id': self.id,
             'name': self.name,
+            'grade': self.grade,
             'class_teacher_id': self.class_teacher_id
         }
 
@@ -248,5 +251,53 @@ class Absence(db.Model):
             'date': self.date.isoformat(),
             'is_substituted': self.is_substituted,
             'substitute_teacher_id': self.substitute_teacher_id
+        }
+
+
+class TeacherUpdateRequest(db.Model):
+    """
+    TeacherUpdateRequest model - stores teacher requests to update subjects and classes.
+    Requires admin approval before changes are applied.
+    
+    Attributes:
+        id: Primary key
+        teacher_id: Foreign key to the teacher making the request
+        requested_subject_ids: JSON array of subject IDs the teacher wants to teach
+        requested_class_ids: JSON array of class IDs the teacher wants to teach
+        status: Request status (pending, approved, rejected)
+        admin_notes: Optional notes from admin when approving/rejecting
+        created_at: Timestamp when request was created
+        updated_at: Timestamp when request was last updated
+    """
+    __tablename__ = 'teacher_update_requests'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    teacher_id = db.Column(db.Integer, db.ForeignKey('teachers.id'), nullable=False)
+    requested_subject_ids = db.Column(db.Text, nullable=False)  # JSON array of subject IDs
+    requested_class_ids = db.Column(db.Text, nullable=False)  # JSON array of class IDs
+    status = db.Column(db.String(20), default='pending', nullable=False)  # pending, approved, rejected
+    admin_notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    # Relationship
+    teacher = db.relationship('Teacher', backref='update_requests', lazy=True)
+    
+    def __repr__(self):
+        return f'<TeacherUpdateRequest Teacher:{self.teacher_id} Status:{self.status}>'
+    
+    def to_dict(self):
+        """Convert request object to dictionary for JSON serialization."""
+        import json
+        return {
+            'id': self.id,
+            'teacher_id': self.teacher_id,
+            'teacher_name': self.teacher.name if self.teacher else None,
+            'requested_subject_ids': json.loads(self.requested_subject_ids) if self.requested_subject_ids else [],
+            'requested_class_ids': json.loads(self.requested_class_ids) if self.requested_class_ids else [],
+            'status': self.status,
+            'admin_notes': self.admin_notes,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
 

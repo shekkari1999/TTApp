@@ -20,9 +20,9 @@
                 </p>
             </div>
             <nav class="sidebar-nav">
-                <a href="#" class="nav-item active" data-section="pending-users">
-                    <span class="nav-icon">👥</span>
-                    <span class="nav-text">Pending Users</span>
+                <a href="#" class="nav-item active" data-section="requests">
+                    <span class="nav-icon">📋</span>
+                    <span class="nav-text">Requests</span>
                 </a>
                 <a href="#" class="nav-item" data-section="all-users">
                     <span class="nav-icon">👤</span>
@@ -59,13 +59,13 @@
 
         <!-- Main Content Area -->
         <main class="admin-main">
-            <!-- Pending Users Section -->
-            <section id="pending-users" class="content-section active">
+            <!-- Unified Requests Section -->
+            <section id="requests" class="content-section active">
                 <div class="section-header">
-                    <h1>Pending User Requests</h1>
-                    <button class="btn btn-primary" onclick="loadPendingUsers()">Refresh</button>
+                    <h1>All Requests</h1>
+                    <button class="btn btn-primary" onclick="loadAllRequests()">Refresh</button>
                 </div>
-                <div id="pendingUsersList" class="content-area"></div>
+                <div id="allRequestsList" class="content-area"></div>
             </section>
 
             <!-- All Users Section -->
@@ -95,6 +95,7 @@
                     <h1>Subjects</h1>
                     <div class="section-actions">
                         <button class="btn btn-secondary" onclick="resetSubjects()">Reset Subjects (IDs)</button>
+                        <button class="btn" onclick="viewAllSubjectTeachers()" style="background: #6366f1; color: white; border: none;">View Subject Teachers</button>
                         <button class="btn btn-primary" onclick="showAddSubjectForm()">+ Add Subject</button>
                     </div>
                 </div>
@@ -107,6 +108,8 @@
                     <h1>Classes</h1>
                     <div class="section-actions">
                         <button class="btn btn-secondary" onclick="resetClasses()">Reset Classes (IDs)</button>
+                        <button class="btn" onclick="viewClassSchedules()" style="background: #6366f1; color: white; border: none;">View Class Schedules</button>
+                        <button class="btn" onclick="generateSchedule()" style="background: #10b981; color: white; border: none;">Generate Schedule</button>
                         <button class="btn btn-primary" onclick="showAddClassForm()">+ Add Class</button>
                     </div>
                 </div>
@@ -121,10 +124,33 @@
                 </div>
                 <div id="classTeachersOverview" class="content-area"></div>
             </section>
+
         </main>
     </div>
 
     <!-- Modals -->
+    <!-- Subject Teachers View Modal -->
+    <div id="subjectTeachersModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('subjectTeachersModal')">&times;</span>
+            <h2 id="subjectTeachersModalTitle">Teachers for Subject</h2>
+            <div id="subjectTeachersList" style="margin-top: 1rem;">
+                <p>Loading teachers...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Class Schedules View Modal -->
+    <div id="classSchedulesModal" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 900px;">
+            <span class="close" onclick="closeModal('classSchedulesModal')">&times;</span>
+            <h2>Class Schedules</h2>
+            <div id="classSchedulesList" style="margin-top: 1rem;">
+                <p>Loading schedules...</p>
+            </div>
+        </div>
+    </div>
+
     <!-- Add/Edit Teacher Modal -->
     <div id="teacherModal" class="modal" style="display: none;">
         <div class="modal-content">
@@ -204,6 +230,11 @@
                 <div class="form-group">
                     <label for="className">Class Name:</label>
                     <input type="text" id="className" required>
+                </div>
+                <div class="form-group">
+                    <label for="classGrade">Grade (6, 7, 8, 9, 10, etc.):</label>
+                    <input type="number" id="classGrade" min="1" max="12" placeholder="e.g., 6, 7, 8, 9, 10">
+                    <small style="color: #666; display: block; margin-top: 4px;">Required for schedule generation</small>
                 </div>
                 <div class="form-group">
                     <label for="classTeacherId">Class Teacher:</label>

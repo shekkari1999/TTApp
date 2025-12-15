@@ -116,6 +116,39 @@
                     </div>
                 </div>
             </div>
+            
+            <!-- Request Update Section -->
+            <div class="timetable-container" style="margin-top: 2rem;">
+                <h2>📝 Request Profile Updates</h2>
+                <p style="color: #666; margin-bottom: 1rem;">Request changes to the subjects and classes you teach. Changes require admin approval.</p>
+                
+                <div id="updateRequestStatus" style="margin-bottom: 1rem;"></div>
+                
+                <form id="updateRequestForm">
+                    <div style="margin-bottom: 1.5rem;">
+                        <label for="requestSubjects" style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Subjects I Teach:</label>
+                        <select id="requestSubjects" multiple size="5" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            <option value="">Loading subjects...</option>
+                        </select>
+                        <small style="color: #666; display: block; margin-top: 4px;">Hold Ctrl (or Cmd on Mac) to select multiple subjects</small>
+                    </div>
+                    
+                    <div style="margin-bottom: 1.5rem;">
+                        <label for="requestClasses" style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Classes I Teach:</label>
+                        <select id="requestClasses" multiple size="5" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            <option value="">Loading classes...</option>
+                        </select>
+                        <small style="color: #666; display: block; margin-top: 4px;">Hold Ctrl (or Cmd on Mac) to select multiple classes</small>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary">Submit Update Request</button>
+                </form>
+                
+                <div id="myRequests" style="margin-top: 2rem;">
+                    <h3>My Update Requests</h3>
+                    <div id="requestsList"></div>
+                </div>
+            </div>
             {% endif %}
         </main>
 
@@ -227,6 +260,198 @@
                 
                 container.innerHTML = html;
             }
+        }
+    </script>
+    
+    <script>
+        // Load subjects and classes for update request form
+        async function loadUpdateRequestData() {
+            try {
+                const [subjectsRes, classesRes, currentTeacherRes] = await Promise.all([
+                    fetch('/api/subjects'),
+                    fetch('/api/classes'),
+                    fetch('/api/teachers')
+                ]);
+                
+                const subjectsData = await subjectsRes.json();
+                const classesData = await classesRes.json();
+                const teachersData = await currentTeacherRes.json();
+                
+                // Get current teacher's data
+                const userResponse = await fetch('/api/auth/check');
+                const userData = await userResponse.json();
+                const currentTeacher = teachersData.teachers?.find(t => t.id === userData.user?.teacher_id);
+                
+                // Populate subjects dropdown
+                const subjectsSelect = document.getElementById('requestSubjects');
+                if (subjectsData.success && subjectsData.subjects) {
+                    subjectsSelect.innerHTML = subjectsData.subjects.map(subject => {
+                        const isSelected = currentTeacher?.subjects?.some(s => s.id === subject.id);
+                        return `<option value="${subject.id}" ${isSelected ? 'selected' : ''}>${subject.name}</option>`;
+                    }).join('');
+                }
+                
+                // Populate classes dropdown
+                const classesSelect = document.getElementById('requestClasses');
+                if (classesData.success && classesData.classes) {
+                    // Get classes teacher currently teaches (from schedules)
+                    const timetableRes = await fetch(`/api/my-timetable?date=${new Date().toISOString().split('T')[0]}`);
+                    const timetableData = await timetableRes.json();
+                    const currentClassIds = new Set();
+                    if (timetableData.success && timetableData.timetable) {
+                        timetableData.timetable.forEach(item => {
+                            if (item.class_id) currentClassIds.add(item.class_id);
+                        });
+                    }
+                    
+                    classesSelect.innerHTML = classesData.classes.map(cls => {
+                        const isSelected = currentClassIds.has(cls.id);
+                        return `<option value="${cls.id}" ${isSelected ? 'selected' : ''}>${cls.name}</option>`;
+                    }).join('');
+                }
+                
+                // Load existing requests
+                loadMyRequests();
+            } catch (error) {
+                console.error('Error loading update request data:', error);
+            }
+        }
+        
+        // Load my requests
+        async function loadMyRequests() {
+            try {
+                const response = await fetch('/api/teacher-update-requests');
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayMyRequests(data.requests);
+                }
+            } catch (error) {
+                console.error('Error loading requests:', error);
+            }
+        }
+        
+        function displayMyRequests(requests) {
+            const container = document.getElementById('requestsList');
+            
+            if (requests.length === 0) {
+                container.innerHTML = '<p style="color: #666;">No update requests yet.</p>';
+                return;
+            }
+            
+            container.innerHTML = requests.map(req => {
+                const statusBadge = {
+                    'pending': { bg: '#fbbf24', color: '#78350f', text: 'Pending' },
+                    'approved': { bg: '#10b981', color: '#065f46', text: 'Approved' },
+                    'rejected': { bg: '#ef4444', color: '#991b1b', text: 'Rejected' }
+                }[req.status] || { bg: '#6b7280', color: '#1f2937', text: req.status };
+                
+                const canDelete = req.status === 'pending';
+                
+                return `
+                    <div style="background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <span style="font-weight: 600;">Request #${req.id}</span>
+                            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                <span style="background: ${statusBadge.bg}; color: ${statusBadge.color}; padding: 4px 12px; border-radius: 12px; font-size: 0.875rem;">${statusBadge.text}</span>
+                                ${canDelete ? `<button onclick="deleteMyRequest(${req.id})" style="background: #dc2626; color: white; border: none; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 0.875rem;" title="Delete Request">🗑️ Delete</button>` : ''}
+                            </div>
+                        </div>
+                        <div style="color: #666; font-size: 0.875rem; margin-bottom: 0.5rem;">
+                            <div>Subjects: ${req.requested_subject_ids.length} selected</div>
+                            <div>Classes: ${req.requested_class_ids.length} selected</div>
+                            <div>Submitted: ${new Date(req.created_at).toLocaleString()}</div>
+                            ${req.admin_notes ? `<div style="margin-top: 0.5rem; padding: 0.5rem; background: #f3f4f6; border-radius: 4px;"><strong>Admin Notes:</strong> ${req.admin_notes}</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            // Check if there's a pending request
+            const hasPending = requests.some(r => r.status === 'pending');
+            const statusDiv = document.getElementById('updateRequestStatus');
+            if (hasPending) {
+                statusDiv.innerHTML = '<div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 1rem; color: #856404;">⚠️ You have a pending update request. Please wait for admin approval before submitting a new one.</div>';
+                document.getElementById('updateRequestForm').style.display = 'none';
+            } else {
+                statusDiv.innerHTML = '';
+                document.getElementById('updateRequestForm').style.display = 'block';
+            }
+        }
+        
+        // Handle form submission
+        document.getElementById('updateRequestForm')?.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const subjectsSelect = document.getElementById('requestSubjects');
+            const classesSelect = document.getElementById('requestClasses');
+            
+            const subjectIds = Array.from(subjectsSelect.selectedOptions)
+                .map(option => parseInt(option.value))
+                .filter(id => !isNaN(id));
+            
+            const classIds = Array.from(classesSelect.selectedOptions)
+                .map(option => parseInt(option.value))
+                .filter(id => !isNaN(id));
+            
+            if (subjectIds.length === 0 && classIds.length === 0) {
+                alert('Please select at least one subject or class.');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/teacher-update-request', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        subject_ids: subjectIds,
+                        class_ids: classIds
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    alert('Update request submitted successfully! Waiting for admin approval.');
+                    loadMyRequests();
+                    loadUpdateRequestData(); // Reload to show current selections
+                } else {
+                    alert('Error: ' + (data.message || 'Failed to submit request'));
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        });
+        
+        // Delete my request
+        async function deleteMyRequest(requestId) {
+            if (!confirm('Are you sure you want to delete this request? This action cannot be undone.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/teacher-update-requests/${requestId}`, {
+                    method: 'DELETE'
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    alert(data.message || 'Request deleted successfully.');
+                    loadMyRequests();
+                    loadUpdateRequestData(); // Reload to enable form again if it was disabled
+                } else {
+                    alert('Error: ' + (data.message || 'Failed to delete request'));
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+        
+        // Make deleteMyRequest available globally
+        window.deleteMyRequest = deleteMyRequest;
+        
+        // Load data when page loads
+        if (document.getElementById('updateRequestForm')) {
+            loadUpdateRequestData();
         }
     </script>
 </body>

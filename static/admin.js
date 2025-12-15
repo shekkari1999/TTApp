@@ -33,8 +33,8 @@ function showSection(sectionId) {
         // Load data for the section if needed
         if (sectionId === 'all-users') {
             loadAllUsers();
-        } else if (sectionId === 'pending-users') {
-            loadPendingUsers();
+        } else if (sectionId === 'requests') {
+            loadAllRequests();
         } else if (sectionId === 'teachers') {
             loadTeachers();
         } else if (sectionId === 'subjects') {
@@ -55,29 +55,127 @@ function showSection(sectionId) {
 document.addEventListener('DOMContentLoaded', function() {
     initNavigation();
     // Load initial data for active section
-    loadPendingUsers();
-    loadAllUsers();
+            loadAllRequests();
+            loadAllUsers();
     loadTeachers();
     loadSubjects();
     loadClasses();
 });
 
 /**
- * PENDING USERS MANAGEMENT
+ * UNIFIED REQUESTS MANAGEMENT
+ * Combines pending user requests and teacher update requests
+ */
+async function loadAllRequests() {
+    try {
+        // Load both types of requests in parallel
+        const [pendingUsersRes, teacherRequestsRes] = await Promise.all([
+            fetch('/api/pending-users'),
+            fetch('/api/teacher-update-requests')
+        ]);
+        
+        const pendingUsersData = await pendingUsersRes.json();
+        const teacherRequestsData = await teacherRequestsRes.json();
+        
+        const pendingUsers = pendingUsersData.success ? pendingUsersData.users : [];
+        const teacherRequests = teacherRequestsData.success ? teacherRequestsData.requests : [];
+        
+        // Filter to only pending requests
+        const pendingTeacherRequests = teacherRequests.filter(r => r.status === 'pending');
+        
+        displayAllRequests(pendingUsers, pendingTeacherRequests);
+    } catch (error) {
+        console.error('Error loading requests:', error);
+        document.getElementById('allRequestsList').innerHTML = 
+            '<div class="empty-state"><p>Error loading requests.</p></div>';
+    }
+}
+
+function displayAllRequests(pendingUsers, pendingTeacherRequests) {
+    const container = document.getElementById('allRequestsList');
+    
+    if (!container) {
+        console.error('Container allRequestsList not found!');
+        return;
+    }
+    
+    console.log('Displaying requests - Users:', pendingUsers.length, 'Teacher Requests:', pendingTeacherRequests.length);
+    
+    const totalPending = pendingUsers.length + pendingTeacherRequests.length;
+    
+    if (totalPending === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No pending requests.</p></div>';
+        return;
+    }
+    
+    let html = '';
+    
+    // User Signup Requests Section
+    if (pendingUsers.length > 0) {
+        html += '<h2 style="margin-bottom: 1.5rem; color: #333; font-size: 1.25rem; font-weight: 600;">👥 User Signup Requests</h2>';
+        html += '<div class="data-list" style="margin-bottom: 3rem;">';
+        html += pendingUsers.map(user => {
+            return `
+                <div class="data-card-wrapper">
+                    <div class="data-card">
+                        <div class="data-card-info">
+                            <div class="data-card-name">${user.username || 'Unknown'}</div>
+                            <div class="data-card-meta">
+                                ${user.email ? `<span>📧 ${user.email}</span>` : ''}
+                                ${user.email ? '<span style="margin: 0 0.5rem;">•</span>' : ''}
+                                <span>🕒 ${user.created_at ? new Date(user.created_at).toLocaleString() : 'N/A'}</span>
+                            </div>
+                        </div>
+                        <div class="data-card-actions-outer">
+                            <button class="btn btn-primary" onclick="approveUser(${user.id})">Approve</button>
+                            <button class="btn btn-delete" onclick="rejectUser(${user.id})">Reject</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        html += '</div>';
+    }
+    
+    // Teacher Update Requests Section
+    if (pendingTeacherRequests.length > 0) {
+        html += '<h2 style="margin-bottom: 1.5rem; color: #333; font-size: 1.25rem; font-weight: 600;">📝 Teacher Update Requests</h2>';
+        html += '<div class="data-list">';
+        html += pendingTeacherRequests.map(req => {
+            return `
+                <div class="data-card-wrapper">
+                    <div class="data-card">
+                        <div class="data-card-info">
+                            <div class="data-card-name">${req.teacher_name || 'Unknown Teacher'}</div>
+                            <div class="data-card-meta">
+                                <span>📚 ${req.requested_subject_ids.length} subject(s)</span>
+                                <span style="margin: 0 0.5rem;">•</span>
+                                <span>🏫 ${req.requested_class_ids.length} class(es)</span>
+                                <span style="margin-left: 1rem; color: #9ca3af;">🕒 ${new Date(req.created_at).toLocaleString()}</span>
+                            </div>
+                        </div>
+                        <div class="data-card-actions-outer">
+                            <button class="btn btn-primary" onclick="viewUpdateRequest(${req.id})">View</button>
+                            <button class="btn" onclick="approveUpdateRequest(${req.id})" style="background: #10b981; color: white; border: none;">Approve</button>
+                            <button class="btn btn-delete" onclick="rejectUpdateRequest(${req.id})">Reject</button>
+                            <button class="btn" onclick="deleteUpdateRequest(${req.id})" style="background: #dc2626; color: white; border: none; padding: 0.5rem 0.75rem;" title="Delete">🗑️</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        html += '</div>';
+    }
+    
+    container.innerHTML = html;
+}
+
+/**
+ * PENDING USERS MANAGEMENT (kept for backward compatibility)
  */
 async function loadPendingUsers() {
-    try {
-        const response = await fetch('/api/pending-users');
-        const data = await response.json();
-        
-        if (data.success) {
-            displayPendingUsers(data.users);
-        }
-    } catch (error) {
-        console.error('Error loading pending users:', error);
-        document.getElementById('pendingUsersList').innerHTML = 
-            '<p style="color: var(--text-secondary);">Error loading pending users.</p>';
-    }
+    // Redirect to unified requests
+    loadAllRequests();
 }
 
 function displayPendingUsers(users) {
@@ -246,7 +344,7 @@ async function submitApproveUser(event) {
         if (data.success) {
             alert(data.message || 'User approved successfully!');
             closeModal('approveUserModal');
-            loadPendingUsers();
+            loadAllRequests();
             loadAllUsers();
             if (createTeacher) {
                 loadTeachers(); // Refresh teachers list
@@ -273,7 +371,7 @@ async function rejectUser(userId) {
         const data = await response.json();
         if (data.success) {
             alert('User rejected.');
-            loadPendingUsers();
+            loadAllRequests();
             loadAllUsers();
         } else {
             alert('Error: ' + (data.message || 'Failed to reject user'));
@@ -706,6 +804,68 @@ function displaySubjects(subjects) {
     `;
 }
 
+async function viewAllSubjectTeachers() {
+    try {
+        document.getElementById('subjectTeachersModalTitle').textContent = 'Subject Teachers Overview';
+        document.getElementById('subjectTeachersList').innerHTML = '<p>Loading...</p>';
+        document.getElementById('subjectTeachersModal').style.display = 'flex';
+        
+        // Fetch all subjects and teachers
+        const [subjectsResponse, teachersResponse] = await Promise.all([
+            fetch('/api/subjects'),
+            fetch('/api/teachers')
+        ]);
+        
+        const subjectsData = await subjectsResponse.json();
+        const teachersData = await teachersResponse.json();
+        
+        if (!subjectsData.success || !teachersData.success) {
+            document.getElementById('subjectTeachersList').innerHTML = '<p style="color: #dc2626;">Error loading data.</p>';
+            return;
+        }
+        
+        const subjects = subjectsData.subjects || [];
+        const teachers = teachersData.teachers || [];
+        
+        if (subjects.length === 0) {
+            document.getElementById('subjectTeachersList').innerHTML = 
+                '<div class="empty-state"><p>No subjects found.</p></div>';
+            return;
+        }
+        
+        // Build table with subjects and their teachers
+        let html = '<table style="width: 100%; border-collapse: collapse; margin-top: 1rem;">';
+        html += '<thead><tr style="border-bottom: 2px solid #e5e7eb;">';
+        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #333;">Subject</th>';
+        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #333;">Teachers</th>';
+        html += '</tr></thead><tbody>';
+        
+        subjects.forEach(subject => {
+            // Find teachers who teach this subject
+            const teachersForSubject = teachers.filter(teacher => {
+                return teacher.subject_ids && teacher.subject_ids.includes(subject.id);
+            });
+            
+            const teacherNames = teachersForSubject.length > 0 
+                ? teachersForSubject.map(t => t.name).join(', ')
+                : '<span style="color: #9ca3af; font-style: italic;">No teachers assigned</span>';
+            
+            html += '<tr style="border-bottom: 1px solid #e5e7eb;">';
+            html += `<td style="padding: 0.75rem; font-weight: 500;">${subject.name}</td>`;
+            html += `<td style="padding: 0.75rem; color: #666;">${teacherNames}</td>`;
+            html += '</tr>';
+        });
+        
+        html += '</tbody></table>';
+        
+        document.getElementById('subjectTeachersList').innerHTML = html;
+    } catch (error) {
+        console.error('Error loading subject teachers:', error);
+        document.getElementById('subjectTeachersList').innerHTML = 
+            '<p style="color: #dc2626;">Error loading data: ' + error.message + '</p>';
+    }
+}
+
 function showAddSubjectForm() {
     document.getElementById('subjectModalTitle').textContent = 'Add Subject';
     document.getElementById('subjectForm').reset();
@@ -1004,6 +1164,112 @@ function displayClasses(classes) {
         });
 }
 
+async function viewClassSchedules() {
+    try {
+        document.getElementById('classSchedulesList').innerHTML = '<p>Loading schedules...</p>';
+        document.getElementById('classSchedulesModal').style.display = 'flex';
+        
+        const response = await fetch('/api/class-schedules');
+        const data = await response.json();
+        
+        if (!data.success) {
+            document.getElementById('classSchedulesList').innerHTML = 
+                '<p style="color: #dc2626;">Error loading schedules: ' + (data.message || 'Unknown error') + '</p>';
+            return;
+        }
+        
+        const classSchedules = data.class_schedules || [];
+        
+        if (classSchedules.length === 0) {
+            document.getElementById('classSchedulesList').innerHTML = 
+                '<div class="empty-state"><p>No class schedules found. Please generate schedules first.</p></div>';
+            return;
+        }
+        
+        // Build table showing class, subject, and teacher
+        let html = '<table style="width: 100%; border-collapse: collapse; margin-top: 1rem;">';
+        html += '<thead><tr style="border-bottom: 2px solid #e5e7eb; background: #f9fafb;">';
+        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #333;">Class</th>';
+        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #333;">Subject</th>';
+        html += '<th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #333;">Teacher</th>';
+        html += '</tr></thead><tbody>';
+        
+        classSchedules.forEach(classSchedule => {
+            if (classSchedule.subjects.length === 0) {
+                html += '<tr style="border-bottom: 1px solid #e5e7eb;">';
+                html += `<td style="padding: 0.75rem; font-weight: 500;">${classSchedule.class_name}</td>`;
+                html += '<td colspan="2" style="padding: 0.75rem; color: #9ca3af; font-style: italic;">No schedule assigned</td>';
+                html += '</tr>';
+            } else {
+                classSchedule.subjects.forEach((entry, index) => {
+                    html += '<tr style="border-bottom: 1px solid #e5e7eb;">';
+                    if (index === 0) {
+                        html += `<td style="padding: 0.75rem; font-weight: 500;" rowspan="${classSchedule.subjects.length}">${classSchedule.class_name}</td>`;
+                    }
+                    html += `<td style="padding: 0.75rem; color: #666;">${entry.subject_name}</td>`;
+                    // Show "No teacher" for Library and Games, or if teacher_name is already "No teacher"
+                    const teacherDisplay = (entry.subject_name.toLowerCase() === 'library' || 
+                                          entry.subject_name.toLowerCase() === 'games' || 
+                                          entry.teacher_name === 'No teacher') 
+                                          ? '<span style="color: #9ca3af; font-style: italic;">No teacher</span>' 
+                                          : entry.teacher_name;
+                    html += `<td style="padding: 0.75rem; color: #666;">${teacherDisplay}</td>`;
+                    html += '</tr>';
+                });
+            }
+        });
+        
+        html += '</tbody></table>';
+        
+        document.getElementById('classSchedulesList').innerHTML = html;
+    } catch (error) {
+        console.error('Error loading class schedules:', error);
+        document.getElementById('classSchedulesList').innerHTML = 
+            '<p style="color: #dc2626;">Error loading schedules: ' + error.message + '</p>';
+    }
+}
+
+async function generateSchedule() {
+    if (!confirm('This will clear all existing schedules and generate new ones based on grade-specific rules. Continue?')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/generate-schedule', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            let message = data.message;
+            
+            // Show detailed report if there are missing requirements
+            if (data.detailed_report && data.detailed_report !== 'All requirements met!') {
+                message += '\n\n' + data.detailed_report;
+                
+                // Also show in console for easier debugging
+                console.log('Missing Requirements Report:', data.missing_requirements);
+                console.log('Detailed Report:', data.detailed_report);
+            }
+            
+            if (data.unscheduled_count > 0) {
+                alert(message + '\n\n⚠️ Some periods could not be scheduled. Please check the report above.');
+            } else {
+                alert(message);
+            }
+            
+            // Optionally reload class schedules view
+            // viewClassSchedules();
+        } else {
+            alert('Error: ' + (data.message || 'Failed to generate schedule'));
+        }
+    } catch (error) {
+        alert('Error: ' + error.message);
+    }
+}
+
 function showAddClassForm() {
     document.getElementById('classModalTitle').textContent = 'Add Class';
     document.getElementById('classForm').reset();
@@ -1022,6 +1288,7 @@ async function editClass(id) {
             document.getElementById('classModalTitle').textContent = 'Edit Class';
             document.getElementById('classId').value = classObj.id;
             document.getElementById('className').value = classObj.name;
+            document.getElementById('classGrade').value = classObj.grade || '';
             await populateClassTeacherSelect([]);
             document.getElementById('classTeacherId').value = classObj.class_teacher_id || '';
             document.getElementById('classModal').style.display = 'flex';
@@ -1035,8 +1302,10 @@ async function saveClass(event) {
     event.preventDefault();
     
     const id = document.getElementById('classId').value;
+    const gradeValue = document.getElementById('classGrade').value;
     const classData = {
         name: document.getElementById('className').value,
+        grade: gradeValue ? parseInt(gradeValue) : null,
         class_teacher_id: document.getElementById('classTeacherId').value || null
     };
     
@@ -1096,9 +1365,218 @@ function closeModal(modalId) {
     document.getElementById(modalId).style.display = 'none';
 }
 
+/**
+ * TEACHER UPDATE REQUESTS MANAGEMENT
+ */
+async function loadTeacherUpdateRequests() {
+    try {
+        const response = await fetch('/api/teacher-update-requests');
+        const data = await response.json();
+        
+        console.log('Teacher update requests response:', data); // Debug log
+        
+        if (data.success) {
+            console.log('Number of requests:', data.requests ? data.requests.length : 0); // Debug log
+            displayTeacherUpdateRequests(data.requests || []);
+        } else {
+            console.error('API returned error:', data.message);
+            document.getElementById('teacherUpdateRequestsList').innerHTML = 
+                `<div class="empty-state"><p>Error: ${data.message || 'Failed to load requests'}</p></div>`;
+        }
+    } catch (error) {
+        console.error('Error loading teacher update requests:', error);
+        document.getElementById('teacherUpdateRequestsList').innerHTML = 
+            `<div class="empty-state"><p>Error loading teacher update requests: ${error.message}</p></div>`;
+    }
+}
+
+function displayTeacherUpdateRequests(requests) {
+    const container = document.getElementById('teacherUpdateRequestsList');
+    
+    console.log('Displaying requests:', requests); // Debug log
+    
+    if (!requests || requests.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No teacher update requests found.</p></div>';
+        return;
+    }
+    
+    // Filter to show only pending requests by default (admin can see all)
+    const pendingRequests = requests.filter(r => r.status === 'pending');
+    const otherRequests = requests.filter(r => r.status !== 'pending');
+    
+    console.log('Pending requests:', pendingRequests.length, 'Other requests:', otherRequests.length); // Debug log
+    
+    if (pendingRequests.length === 0 && otherRequests.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No teacher update requests.</p></div>';
+        return;
+    }
+    
+    let html = '';
+    
+    if (pendingRequests.length > 0) {
+        html += '<h2 style="margin-bottom: 1rem;">Pending Requests</h2>';
+        html += '<div class="data-list">';
+        html += pendingRequests.map(req => {
+            return `
+                <div class="data-card">
+                    <div class="data-card-info">
+                        <div class="data-card-name">${req.teacher_name || 'Unknown Teacher'}</div>
+                        <div class="data-card-meta">
+                            Requested ${req.requested_subject_ids.length} subject(s) and ${req.requested_class_ids.length} class(es)
+                            <br>Submitted: ${new Date(req.created_at).toLocaleString()}
+                        </div>
+                    </div>
+                    <div class="data-card-actions">
+                        <button class="btn btn-primary" onclick="viewUpdateRequest(${req.id})" title="View Details">View</button>
+                        <button class="btn" style="background: #10b981; color: white;" onclick="approveUpdateRequest(${req.id})" title="Approve">✓ Approve</button>
+                        <button class="btn btn-delete" onclick="rejectUpdateRequest(${req.id})" title="Reject">✗ Reject</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        html += '</div>';
+    }
+    
+    if (otherRequests.length > 0) {
+        html += '<h2 style="margin-top: 2rem; margin-bottom: 1rem;">Other Requests</h2>';
+        html += '<div class="data-list">';
+        html += otherRequests.map(req => {
+            const statusBadge = {
+                'approved': { bg: '#10b981', color: 'white', text: 'Approved' },
+                'rejected': { bg: '#ef4444', color: 'white', text: 'Rejected' }
+            }[req.status] || { bg: '#6b7280', color: 'white', text: req.status };
+            
+            return `
+                <div class="data-card">
+                    <div class="data-card-info">
+                        <div class="data-card-name">${req.teacher_name || 'Unknown Teacher'}</div>
+                        <div class="data-card-meta">
+                            <span style="background: ${statusBadge.bg}; color: ${statusBadge.color}; padding: 4px 12px; border-radius: 12px; font-size: 0.875rem;">${statusBadge.text}</span>
+                            <br>Requested ${req.requested_subject_ids.length} subject(s) and ${req.requested_class_ids.length} class(es)
+                            <br>${new Date(req.created_at).toLocaleString()}
+                            ${req.admin_notes ? `<br><strong>Admin Notes:</strong> ${req.admin_notes}` : ''}
+                        </div>
+                    </div>
+                    <div class="data-card-actions">
+                        <button class="btn btn-icon-only" onclick="viewUpdateRequest(${req.id})" title="View Details">👁️</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        html += '</div>';
+    }
+    
+    container.innerHTML = html;
+}
+
+async function viewUpdateRequest(requestId) {
+    try {
+        const response = await fetch('/api/teacher-update-requests');
+        const data = await response.json();
+        const request = data.requests.find(r => r.id === requestId);
+        
+        if (!request) {
+            alert('Request not found');
+            return;
+        }
+        
+        // Load subjects and classes to show names
+        const [subjectsRes, classesRes] = await Promise.all([
+            fetch('/api/subjects'),
+            fetch('/api/classes')
+        ]);
+        const subjectsData = await subjectsRes.json();
+        const classesData = await classesRes.json();
+        
+        const subjectNames = request.requested_subject_ids.map(id => {
+            const subject = subjectsData.subjects?.find(s => s.id === id);
+            return subject ? subject.name : `Subject #${id}`;
+        }).join(', ');
+        
+        const classNames = request.requested_class_ids.map(id => {
+            const cls = classesData.classes?.find(c => c.id === id);
+            return cls ? cls.name : `Class #${id}`;
+        }).join(', ');
+        
+        alert(`Request Details:\n\nTeacher: ${request.teacher_name}\nStatus: ${request.status}\n\nSubjects: ${subjectNames || 'None'}\nClasses: ${classNames || 'None'}\n\n${request.admin_notes ? `Admin Notes: ${request.admin_notes}` : ''}`);
+    } catch (error) {
+        alert('Error: ' + error.message);
+    }
+}
+
+async function approveUpdateRequest(requestId) {
+    const notes = prompt('Add optional notes for this approval:');
+    if (notes === null) return; // User cancelled
+    
+    try {
+        const response = await fetch(`/api/teacher-update-requests/${requestId}/approve`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ admin_notes: notes || '' })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            alert(data.message || 'Request approved successfully.');
+            loadTeacherUpdateRequests();
+            loadTeachers(); // Refresh teachers list
+            loadClasses(); // Refresh classes in case schedules changed
+        } else {
+            alert('Error: ' + (data.message || 'Failed to approve request'));
+        }
+    } catch (error) {
+        alert('Error: ' + error.message);
+    }
+}
+
+async function rejectUpdateRequest(requestId) {
+    const notes = prompt('Add optional notes for this rejection:');
+    if (notes === null) return; // User cancelled
+    
+    try {
+        const response = await fetch(`/api/teacher-update-requests/${requestId}/reject`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ admin_notes: notes || '' })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            alert(data.message || 'Request rejected.');
+            loadAllRequests();
+        } else {
+            alert('Error: ' + (data.message || 'Failed to reject request'));
+        }
+    } catch (error) {
+        alert('Error: ' + error.message);
+    }
+}
+
+async function deleteUpdateRequest(requestId) {
+    if (!confirm('Are you sure you want to delete this request? This action cannot be undone.')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/teacher-update-requests/${requestId}`, {
+            method: 'DELETE'
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            alert(data.message || 'Request deleted successfully.');
+            loadAllRequests();
+        } else {
+            alert('Error: ' + (data.message || 'Failed to delete request'));
+        }
+    } catch (error) {
+        alert('Error: ' + error.message);
+    }
+}
+
 // Close modal when clicking outside
 window.onclick = function(event) {
-    const modals = ['teacherModal', 'subjectModal', 'classModal', 'approveUserModal'];
+    const modals = ['teacherModal', 'subjectModal', 'classModal', 'approveUserModal', 'subjectTeachersModal', 'classSchedulesModal'];
     modals.forEach(modalId => {
         const modal = document.getElementById(modalId);
         if (event.target === modal) {
