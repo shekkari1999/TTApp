@@ -781,13 +781,20 @@ def generate_schedule():
                 f"Subjects with no teachers assigned: {', '.join(subjects_without_any_teacher)}"
             )
         
+        # Track subject-teacher assignments per class (to ensure consistency across days)
+        # {class_id: {subject_id: teacher_id}}
+        class_subject_teacher_map = {}
+        
         # Generate schedule for Monday-Friday (0-4), Sunday (6) is holiday
         for day in range(5):  # Monday to Friday
             for class_obj in classes:
+                # Initialize class-subject-teacher map if not exists
+                if class_obj.id not in class_subject_teacher_map:
+                    class_subject_teacher_map[class_obj.id] = {}
                 grade = class_obj.grade
                 
                 if grade in [6, 7]:
-                    # 6th and 7th: 6 subjects + library + games = 8 periods
+                    # 6th and 7th: 6 unique subjects + library + games = 8 periods (no subject repeats)
                     # Physical Science and Bio Science become "Science" (taught by Bio Science teachers)
                     # Get regular subjects (exclude library, games, physical science)
                     regular_subjects = [
@@ -798,7 +805,6 @@ def generate_schedule():
                     ]
                     
                     # Replace Bio Science with "Science" if Science subject exists, otherwise use Bio Science
-                    # If both Physical Science and Bio Science exist, combine them into Science
                     science_subject_to_use = None
                     if science_subject:
                         science_subject_to_use = science_subject
@@ -816,59 +822,82 @@ def generate_schedule():
                     if science_subject_to_use:
                         regular_subjects.append(science_subject_to_use)
                     
-                    # Ensure we have exactly 6 subjects
+                    # Ensure we have exactly 6 unique subjects
                     regular_subjects = regular_subjects[:6]
                     
-                    # Period 1: Class teacher if available, otherwise first subject
+                    # Check what subjects are already scheduled for this class on this day to avoid duplicates
+                    existing_subjects_today = set()
+                    existing_schedules_today = Schedule.query.filter_by(
+                        class_id=class_obj.id,
+                        day=day
+                    ).all()
+                    for sched in existing_schedules_today:
+                        existing_subjects_today.add(sched.subject_id)
+                    
+                    # Period 1: Class teacher if available
                     period1_assigned = False
                     if class_obj.class_teacher_id and day == 0:  # Only on first day (Monday) for class teacher
-                        # Class teacher teaches first period on Monday
                         class_teacher = Teacher.query.get(class_obj.class_teacher_id)
                         if class_teacher and regular_subjects:
+                            # Use first subject that hasn't been scheduled yet today
+                            subject_for_period1 = None
+                            for subj in regular_subjects:
+                                if subj.id not in existing_subjects_today:
+                                    subject_for_period1 = subj
+                                    break
+                            if not subject_for_period1:
+                                subject_for_period1 = regular_subjects[0]  # Fallback to first subject
+                            
                             schedule = Schedule(
                                 teacher_id=class_teacher.id,
                                 class_id=class_obj.id,
-                                subject_id=regular_subjects[0].id,
+                                subject_id=subject_for_period1.id,
                                 day=day,
                                 period=1
                             )
                             db.session.add(schedule)
+                            existing_subjects_today.add(subject_for_period1.id)
+                            # Store this assignment for consistency across days
+                            class_subject_teacher_map[class_obj.id][subject_for_period1.id] = class_teacher.id
                             period1_assigned = True
                     
-                    # Period 1-6: Regular subjects (generate ALL, even without teachers)
+                    # Period 1-6: Regular subjects (each subject appears only once per day)
                     for period in range(1, 7):
                         # Skip period 1 if class teacher already assigned it
                         if period == 1 and period1_assigned:
                             continue
                         
-                        subject_index = period - 1
-                        if subject_index < len(regular_subjects):
-                            subject = regular_subjects[subject_index]
-                            teacher_id = get_available_teacher_for_subject(subject.id, day, period, class_obj.id)
-                            
-                            # If no teacher available, use placeholder teacher
-                            if not teacher_id:
-                                placeholder_teacher = teachers[0] if teachers else None
-                                if placeholder_teacher:
-                                    teacher_id = placeholder_teacher.id
-                                else:
-                                    # Skip if no teachers exist at all
-                                    unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period {period}: {subject.name} (no teachers in system)")
-                                    continue
-                            
-                            schedule = Schedule(
-                                teacher_id=teacher_id,
-                                class_id=class_obj.id,
-                                subject_id=subject.id,
-                                day=day,
-                                period=period
-                            )
-                            db.session.add(schedule)
-                        else:
-                            unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period {period}: No subject assigned")
-                            if class_obj.name not in missing_requirements['classes_missing_subjects']:
-                                missing_requirements['classes_missing_subjects'][class_obj.name] = []
-                            missing_requirements['classes_missing_subjects'][class_obj.name].append(f"Day {day+1} Period {period}")
+                        # Find a subject that hasn't been scheduled yet today
+                        subject = None
+                        for subj in regular_subjects:
+                            if subj.id not in existing_subjects_today:
+                                subject = subj
+                                break
+                        
+                        if not subject:
+                            # All subjects scheduled, skip
+                            break
+                        
+                        teacher_id = get_available_teacher_for_subject(subject.id, day, period, class_obj.id)
+                        
+                        # If no teacher available, use placeholder teacher
+                        if not teacher_id:
+                            placeholder_teacher = teachers[0] if teachers else None
+                            if placeholder_teacher:
+                                teacher_id = placeholder_teacher.id
+                            else:
+                                unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period {period}: {subject.name} (no teachers in system)")
+                                continue
+                        
+                        schedule = Schedule(
+                            teacher_id=teacher_id,
+                            class_id=class_obj.id,
+                            subject_id=subject.id,
+                            day=day,
+                            period=period
+                        )
+                        db.session.add(schedule)
+                        existing_subjects_today.add(subject.id)
                     
                     # Period 7: Library (no teacher required)
                     if library_subject:
@@ -919,7 +948,7 @@ def generate_schedule():
                         missing_requirements['summary'].append(f"{class_obj.name}: Games subject not found in database")
                 
                 elif grade in [8, 9]:
-                    # 8th and 9th: 7 subjects + library/games (alternating) = 8 periods
+                    # 8th and 9th: 7 unique subjects + library/games (alternating) = 8 periods (no subject repeats)
                     # Get 7 regular subjects (exclude library, games)
                     regular_subjects = [
                         s for s in subjects 
@@ -927,30 +956,64 @@ def generate_schedule():
                         and s.id != (games_subject.id if games_subject else None)
                     ][:7]
                     
+                    # Check what subjects are already scheduled for this class on this day to avoid duplicates
+                    existing_subjects_today = set()
+                    existing_schedules_today = Schedule.query.filter_by(
+                        class_id=class_obj.id,
+                        day=day
+                        ).all()
+                    for sched in existing_schedules_today:
+                        existing_subjects_today.add(sched.subject_id)
+                    
                     # Period 1: Class teacher if available
                     period1_assigned = False
                     if class_obj.class_teacher_id and day == 0:  # Only on first day (Monday) for class teacher
                         class_teacher = Teacher.query.get(class_obj.class_teacher_id)
                         if class_teacher and regular_subjects:
+                            # Use first subject that hasn't been scheduled yet today
+                            subject_for_period1 = None
+                            for subj in regular_subjects:
+                                if subj.id not in existing_subjects_today:
+                                    subject_for_period1 = subj
+                                    break
+                            if not subject_for_period1:
+                                subject_for_period1 = regular_subjects[0]  # Fallback to first subject
+                            
                             schedule = Schedule(
                                 teacher_id=class_teacher.id,
                                 class_id=class_obj.id,
-                                subject_id=regular_subjects[0].id,
+                                subject_id=subject_for_period1.id,
                                 day=day,
                                 period=1
                             )
                             db.session.add(schedule)
+                            existing_subjects_today.add(subject_for_period1.id)
+                            # Store this assignment for consistency across days
+                            class_subject_teacher_map[class_obj.id][subject_for_period1.id] = class_teacher.id
                             period1_assigned = True
                     
-                    # Period 1-7: Regular subjects (generate ALL, even without teachers)
+                    # Period 1-7: Regular subjects (each subject appears only once per day)
                     for period in range(1, 8):
                         # Skip period 1 if class teacher already assigned it
                         if period == 1 and period1_assigned:
                             continue
                         
-                        subject_index = period - 1
-                        if subject_index < len(regular_subjects):
-                            subject = regular_subjects[subject_index]
+                        # Find a subject that hasn't been scheduled yet today
+                        subject = None
+                        for subj in regular_subjects:
+                            if subj.id not in existing_subjects_today:
+                                subject = subj
+                                break
+                        
+                        if not subject:
+                            # All subjects scheduled, skip
+                            break
+                        
+                        # Check if this subject already has a teacher assigned for this class (from previous days)
+                        if subject.id in class_subject_teacher_map[class_obj.id]:
+                            teacher_id = class_subject_teacher_map[class_obj.id][subject.id]
+                        else:
+                            # First time assigning this subject to this class - find a teacher
                             teacher_id = get_available_teacher_for_subject(subject.id, day, period, class_obj.id)
                             
                             # If no teacher available, use placeholder teacher
@@ -962,14 +1025,18 @@ def generate_schedule():
                                     unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period {period}: {subject.name} (no teachers in system)")
                                     continue
                             
-                            schedule = Schedule(
-                                teacher_id=teacher_id,
-                                class_id=class_obj.id,
-                                subject_id=subject.id,
-                                day=day,
-                                period=period
-                            )
-                            db.session.add(schedule)
+                            # Store this assignment for future days
+                            class_subject_teacher_map[class_obj.id][subject.id] = teacher_id
+                        
+                        schedule = Schedule(
+                            teacher_id=teacher_id,
+                            class_id=class_obj.id,
+                            subject_id=subject.id,
+                            day=day,
+                            period=period
+                        )
+                        db.session.add(schedule)
+                        existing_subjects_today.add(subject.id)
                     
                     # Period 8: Library or Games (alternating days) - no teacher required
                     # Monday, Wednesday, Friday = Library; Tuesday, Thursday = Games
@@ -1000,11 +1067,23 @@ def generate_schedule():
                         missing_requirements['summary'].append(f"{class_obj.name}: Library/Games subject not found in database")
                 
                 elif grade == 10:
-                    # 10th: Maths at 1st and last period, remaining 6 periods for other subjects
+                    # 10th: Maths at 1st and last period, remaining 6 periods for other unique subjects
+                    # Maths is the only subject that can repeat (periods 1 and 8)
                     if not maths_subject:
                         unscheduled_periods.append(f"{class_obj.name} Day {day+1}: Maths subject not found")
                         missing_requirements['summary'].append(f"{class_obj.name}: Maths subject not found in database")
                         continue  # Skip if no Maths subject
+                    
+                    # Check what subjects are already scheduled for this class on this day (excluding Maths which can repeat)
+                    existing_subjects_today = set()
+                    existing_schedules_today = Schedule.query.filter_by(
+                        class_id=class_obj.id,
+                        day=day
+                    ).all()
+                    for sched in existing_schedules_today:
+                        # Don't count Maths as existing since it can appear twice
+                        if sched.subject_id != maths_subject.id:
+                            existing_subjects_today.add(sched.subject_id)
                     
                     # Period 1: Maths (class teacher if available, otherwise any teacher or placeholder)
                     if class_obj.class_teacher_id and day == 0:  # Class teacher on Monday
@@ -1030,16 +1109,29 @@ def generate_schedule():
                         )
                         db.session.add(schedule)
                     
-                    # Period 2-7: Other subjects (exclude Maths) - generate ALL, even without teachers
+                    # Period 2-7: Other subjects (exclude Maths) - each subject appears only once
                     other_subjects = [
                         s for s in subjects 
                         if s.id != maths_subject.id
                     ][:6]
                     
                     for period in range(2, 8):
-                        subject_index = period - 2
-                        if subject_index < len(other_subjects):
-                            subject = other_subjects[subject_index]
+                        # Find a subject that hasn't been scheduled yet today
+                        subject = None
+                        for subj in other_subjects:
+                            if subj.id not in existing_subjects_today:
+                                subject = subj
+                                break
+                        
+                        if not subject:
+                            # All subjects scheduled, skip
+                            break
+                        
+                        # Check if this subject already has a teacher assigned for this class (from previous days)
+                        if subject.id in class_subject_teacher_map[class_obj.id]:
+                            teacher_id = class_subject_teacher_map[class_obj.id][subject.id]
+                        else:
+                            # First time assigning this subject to this class - find a teacher
                             teacher_id = get_available_teacher_for_subject(subject.id, day, period, class_obj.id)
                             
                             # If no teacher available, use placeholder teacher
@@ -1051,24 +1143,28 @@ def generate_schedule():
                                     unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period {period}: {subject.name} (no teachers in system)")
                                     continue
                             
-                            schedule = Schedule(
-                                teacher_id=teacher_id,
-                                class_id=class_obj.id,
-                                subject_id=subject.id,
-                                day=day,
-                                period=period
-                            )
-                            db.session.add(schedule)
-                        else:
-                            unscheduled_periods.append(f"{class_obj.name} Day {day+1} Period {period}: No subject assigned")
-                            if class_obj.name not in missing_requirements['classes_missing_subjects']:
-                                missing_requirements['classes_missing_subjects'][class_obj.name] = []
-                            missing_requirements['classes_missing_subjects'][class_obj.name].append(f"Day {day+1} Period {period}")
+                            # Store this assignment for future days
+                            class_subject_teacher_map[class_obj.id][subject.id] = teacher_id
+                        
+                        schedule = Schedule(
+                            teacher_id=teacher_id,
+                            class_id=class_obj.id,
+                            subject_id=subject.id,
+                            day=day,
+                            period=period
+                        )
+                        db.session.add(schedule)
+                        existing_subjects_today.add(subject.id)
                     
-                    # Period 8: Maths
-                    teacher_id = get_available_teacher_for_subject(maths_subject.id, day, 8, class_obj.id)
-                    if not teacher_id:
-                        teacher_id = teachers[0].id if teachers else None
+                    # Period 8: Maths (use the same teacher as period 1 for consistency)
+                    if maths_subject.id in class_subject_teacher_map[class_obj.id]:
+                        teacher_id = class_subject_teacher_map[class_obj.id][maths_subject.id]
+                    else:
+                        # Fallback (shouldn't happen if period 1 was assigned)
+                        teacher_id = get_available_teacher_for_subject(maths_subject.id, day, 8, class_obj.id)
+                        if not teacher_id:
+                            teacher_id = teachers[0].id if teachers else None
+                        class_subject_teacher_map[class_obj.id][maths_subject.id] = teacher_id
                     
                     if teacher_id:
                         schedule = Schedule(
@@ -1781,29 +1877,62 @@ def get_class_schedules():
     # Build class schedule data
     class_schedules = []
     for class_obj in classes:
-        # Get all unique subject-teacher combinations for this class
-        class_schedule_entries = {}
+        # Get unique subject-teacher assignments for this class
+        # Each subject should have only ONE teacher (group by subject_id only, not subject_id+teacher_id)
+        subject_teacher_map = {}  # {subject_id: teacher_id}
+        
+        # For 8th/9th grade: Track if Library or Games appears (they alternate, so show as one entry)
+        class_grade = class_obj.grade if hasattr(class_obj, 'grade') else None
+        has_library = False
+        has_games = False
         
         for schedule in schedules:
             if schedule.class_id == class_obj.id:
-                key = (schedule.subject_id, schedule.teacher_id)
-                if key not in class_schedule_entries:
-                    subject_name = subject_map.get(schedule.subject_id, 'Unknown')
-                    # Library and Games don't have teachers
-                    if schedule.subject_id in no_teacher_subject_ids:
-                        teacher_name = 'No teacher'
-                    else:
-                        teacher_name = teacher_map.get(schedule.teacher_id, 'Unknown')
-                    
-                    class_schedule_entries[key] = {
-                        'subject_id': schedule.subject_id,
-                        'subject_name': subject_name,
-                        'teacher_id': schedule.teacher_id,
-                        'teacher_name': teacher_name
-                    }
+                subject_id = schedule.subject_id
+                
+                # For 8th/9th grade: Track Library/Games separately
+                if class_grade in [8, 9]:
+                    if subject_id == (library_subject.id if library_subject else None):
+                        has_library = True
+                    elif subject_id == (games_subject.id if games_subject else None):
+                        has_games = True
+                    # Skip adding Library/Games to subject_teacher_map for now
+                    if subject_id in no_teacher_subject_ids:
+                        continue
+                
+                # If subject already seen, keep the first teacher assigned
+                if subject_id not in subject_teacher_map:
+                    subject_teacher_map[subject_id] = schedule.teacher_id
+        
+        # Build the list of subjects with their teachers
+        subjects_list = []
+        for subject_id, teacher_id in subject_teacher_map.items():
+            subject_name = subject_map.get(subject_id, 'Unknown')
+            # Library and Games don't have teachers
+            if subject_id in no_teacher_subject_ids:
+                teacher_name = 'No teacher'
+            else:
+                teacher_name = teacher_map.get(teacher_id, 'Unknown')
+            
+            subjects_list.append({
+                'subject_id': subject_id,
+                'subject_name': subject_name,
+                'teacher_id': teacher_id,
+                'teacher_name': teacher_name
+            })
+        
+        # For 8th/9th grade: Add Library/Games as a single combined entry
+        if class_grade in [8, 9]:
+            if has_library or has_games:
+                # Show as "Library/Games" since they alternate on different days
+                subjects_list.append({
+                    'subject_id': library_subject.id if library_subject else (games_subject.id if games_subject else None),
+                    'subject_name': 'Library/Games',
+                    'teacher_id': None,
+                    'teacher_name': 'No teacher'
+                })
         
         # Sort subjects by name for consistent display
-        subjects_list = list(class_schedule_entries.values())
         subjects_list.sort(key=lambda x: x['subject_name'])
         
         class_schedules.append({
