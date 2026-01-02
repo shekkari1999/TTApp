@@ -1,2 +1,4 @@
-Initial functionality
-Schoool has 7subjects.
+fastapi
+uvicorn
+jinja2
+python-multipart

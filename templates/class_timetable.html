@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Class Timetable - TTApp</title>
+    <link rel="stylesheet" href="/static/css/timetable.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📚 Class Timetable</h1>
+            <p class="subtitle">View weekly schedule for any class</p>
+        </header>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="classSelect">Select Class:</label>
+                <select id="classSelect">
+                    <option value="">Loading classes...</option>
+                </select>
+            </div>
+            
+            <button class="btn-print" onclick="window.print()">
+                🖨️ Print Timetable
+            </button>
+        </div>
+
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>Loading timetable...</p>
+        </div>
+
+        <div id="error" class="error" style="display:none;">
+            <p>⚠️ Error loading timetable. Please try again.</p>
+        </div>
+        
+        <div id="timetableContainer" style="display:none;">
+            <div class="table-wrapper">
+                <table id="timetable">
+                    <thead>
+                        <tr>
+                            <th class="period-header">Period</th>
+                            <th>Monday</th>
+                            <th>Tuesday</th>
+                            <th>Wednesday</th>
+                            <th>Thursday</th>
+                            <th>Friday</th>
+                        </tr>
+                    </thead>
+                    <tbody id="timetableBody">
+                        <!-- Populated by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="emptyState" class="empty-state" style="display:none;">
+            <p>📋 No timetable available for this class</p>
+        </div>
+    </div>
+
+    <script src="/static/js/timetable.js"></script>
+</body>
+</html>
